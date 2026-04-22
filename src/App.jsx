@@ -32,7 +32,6 @@ function reducer(state, action) {
       };
     case 'CLEAR':
       return initial;
-    // Player-side: overwrite tokens with received state
     case 'SET_TOKENS':
       return { ...state, tokens: action.tokens };
     default:
@@ -43,21 +42,38 @@ function reducer(state, action) {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [state,     dispatch]      = useReducer(reducer, initial);
-  const [modal,     setModal]      = useState(null);         // null | 'PC' | 'NPC'
-  const [focusedId, setFocusedId]  = useState(null);
+  const [state,      dispatch]       = useReducer(reducer, initial);
+  const [modal,      setModal]       = useState(null);
+  const [focusedId,  setFocusedId]   = useState(null);
+  const [ringAnchor, setRingAnchor]  = useState(null);   // { x, y } — where rings are pinned
 
-  // Always-fresh ref so the REQUEST_STATE handler never reads stale closure values
-  const latestRef = useRef({ tokens: state.tokens, focusedId });
-  useEffect(() => { latestRef.current = { tokens: state.tokens, focusedId }; });
+  // Always-fresh ref for the REQUEST_STATE handler
+  const latestRef = useRef({ tokens: state.tokens, focusedId, ringAnchor });
+  useEffect(() => { latestRef.current = { tokens: state.tokens, focusedId, ringAnchor }; });
 
-  // ── GM: broadcast every state change to player tabs ──────────────────────
+  // ── Focus helpers ──────────────────────────────────────────────────────────
+  const handleFocusChange = id => {
+    setFocusedId(id);
+    if (id != null) {
+      const tok = state.tokens.find(t => t.id === id);
+      if (tok) setRingAnchor({ x: tok.x, y: tok.y });
+    } else {
+      setRingAnchor(null);
+    }
+  };
+
+  // GM clicks the already-focused token → snap rings to its current position
+  const handleConfirmPosition = id => {
+    const tok = state.tokens.find(t => t.id === id);
+    if (tok) setRingAnchor({ x: tok.x, y: tok.y });
+  };
+
+  // ── GM: broadcast state ────────────────────────────────────────────────────
   useEffect(() => {
     if (ROLE !== 'gm') return;
-    CHANNEL.postMessage({ type: 'STATE_UPDATE', tokens: state.tokens, focusedId });
-  }, [state.tokens, focusedId]);
+    CHANNEL.postMessage({ type: 'STATE_UPDATE', tokens: state.tokens, focusedId, ringAnchor });
+  }, [state.tokens, focusedId, ringAnchor]);
 
-  // ── GM: respond when a player tab opens and requests current state ────────
   useEffect(() => {
     if (ROLE !== 'gm') return;
     const handler = e => {
@@ -69,21 +85,21 @@ export default function App() {
     return () => CHANNEL.removeEventListener('message', handler);
   }, []);
 
-  // ── Player: receive state from GM ─────────────────────────────────────────
+  // ── Player: receive state ──────────────────────────────────────────────────
   useEffect(() => {
     if (ROLE !== 'player') return;
     const handler = e => {
       if (e.data.type !== 'STATE_UPDATE') return;
       dispatch({ type: 'SET_TOKENS', tokens: e.data.tokens });
       setFocusedId(e.data.focusedId);
+      setRingAnchor(e.data.ringAnchor);
     };
     CHANNEL.addEventListener('message', handler);
-    // Ask the GM tab for the current state immediately on load
     CHANNEL.postMessage({ type: 'REQUEST_STATE' });
     return () => CHANNEL.removeEventListener('message', handler);
   }, []);
 
-  // ── Token spawn ───────────────────────────────────────────────────────────
+  // ── Token spawn ────────────────────────────────────────────────────────────
   const handleAddToken = (name, type) => {
     dispatch({
       type: 'ADD_TOKEN', name, tokenType: type,
@@ -91,6 +107,11 @@ export default function App() {
       y: 100 + Math.random() * Math.max(200, window.innerHeight - 220),
     });
     setModal(null);
+  };
+
+  const handleRemoveToken = id => {
+    dispatch({ type: 'REMOVE_TOKEN', id });
+    if (focusedId === id) { setFocusedId(null); setRingAnchor(null); }
   };
 
   return (
@@ -104,7 +125,7 @@ export default function App() {
             <div className="toolbar">
               <button className="btn btn-pc"  onClick={() => setModal('PC')}>+ PC</button>
               <button className="btn btn-npc" onClick={() => setModal('NPC')}>+ NPC / Enemy</button>
-              <button className="btn btn-clr" onClick={() => { dispatch({ type: 'CLEAR' }); setFocusedId(null); }}>Clear</button>
+              <button className="btn btn-clr" onClick={() => { dispatch({ type: 'CLEAR' }); setFocusedId(null); setRingAnchor(null); }}>Clear</button>
             </div>
           </>
         ) : (
@@ -116,9 +137,11 @@ export default function App() {
         <Graph
           tokens={state.tokens}
           focusedId={focusedId}
-          onFocusChange={setFocusedId}
+          ringAnchor={ringAnchor}
+          onFocusChange={handleFocusChange}
+          onConfirmPosition={handleConfirmPosition}
           onMoveToken={(id, x, y) => dispatch({ type: 'MOVE_TOKEN', id, x, y })}
-          onRemoveToken={id => dispatch({ type: 'REMOVE_TOKEN', id })}
+          onRemoveToken={handleRemoveToken}
           role={ROLE}
         />
       </main>

@@ -10,13 +10,18 @@ const ZOOM_STEP = 1.3;
 
 export default function Graph({
   tokens,
-  focusedId,       // lifted to App — shared via BroadcastChannel
-  onFocusChange,   // (id | null) => void
+  focusedId,
+  ringAnchor,          // { x, y } — pinned ring centre (set on focus, updated on confirm)
+  onFocusChange,
+  onConfirmPosition,   // (id) => void — snap rings to token's current position
   onMoveToken,
   onRemoveToken,
-  role,            // 'gm' | 'player'
+  role,
 }) {
   const containerRef = useRef(null);
+  const tokensRef    = useRef(tokens);
+  tokensRef.current  = tokens;
+
   const [dims,     setDims]     = useState({ width: 800, height: 600 });
   const [viewport, setViewport] = useState({ zoom: 1, panX: 0, panY: 0 });
   const [panning,  setPanning]  = useState(false);
@@ -24,6 +29,10 @@ export default function Graph({
   const isGM = role === 'gm';
   const focusedToken = tokens.find(t => t.id === focusedId) ?? null;
   const viewBox = `${viewport.panX} ${viewport.panY} ${dims.width / viewport.zoom} ${dims.height / viewport.zoom}`;
+
+  // Has the focused token moved away from its anchor?
+  const hasMoved = focusedToken && ringAnchor &&
+    (Math.abs(focusedToken.x - ringAnchor.x) > 1 || Math.abs(focusedToken.y - ringAnchor.y) > 1);
 
   // ── Resize observer ────────────────────────────────────────────────────
   useEffect(() => {
@@ -87,7 +96,14 @@ export default function Graph({
       if (moved) onMoveToken(tokenId, tx0 + dsx / z, ty0 + dsy / z);
     };
     const onUp = () => {
-      if (!moved) onFocusChange(focusedId === tokenId ? null : tokenId);
+      if (!moved) {
+        if (focusedId === tokenId) {
+          // Already focused — confirm: snap rings to current position
+          onConfirmPosition(tokenId);
+        } else {
+          onFocusChange(tokenId);
+        }
+      }
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup',   onUp);
     };
@@ -113,7 +129,13 @@ export default function Graph({
       if (moved) onMoveToken(tokenId, tx0 + dsx / z, ty0 + dsy / z);
     };
     const onEnd = () => {
-      if (!moved) onFocusChange(focusedId === tokenId ? null : tokenId);
+      if (!moved) {
+        if (focusedId === tokenId) {
+          onConfirmPosition(tokenId);
+        } else {
+          onFocusChange(tokenId);
+        }
+      }
       window.removeEventListener('touchmove', onMove);
       window.removeEventListener('touchend',  onEnd);
     };
@@ -121,7 +143,7 @@ export default function Graph({
     window.addEventListener('touchend',  onEnd);
   }
 
-  // ── Canvas pan (both roles can pan independently) ──────────────────────
+  // ── Canvas pan ─────────────────────────────────────────────────────────
   function handleSvgMouseDown(e) {
     if (e.button !== 0) return;
     const x0    = e.clientX, y0    = e.clientY;
@@ -135,7 +157,6 @@ export default function Graph({
       if (moved) setViewport(v => ({ ...v, panX: panX0 - dsx / z, panY: panY0 - dsy / z }));
     };
     const onUp = () => {
-      // Only GM clicking empty canvas clears focus
       if (!moved && isGM) onFocusChange(null);
       setPanning(false);
       window.removeEventListener('mousemove', onMove);
@@ -164,22 +185,25 @@ export default function Graph({
         viewBox={viewBox}
         onMouseDown={handleSvgMouseDown}
       >
-        {/* ── Distance rings ── */}
-        {focusedToken && (
+        {/* ── Distance rings — pinned at ringAnchor ── */}
+        {ringAnchor && focusedToken && (
           <g className="rings-group" style={{ pointerEvents: 'none' }}>
+            {/* Zone fills (outermost first) */}
             {[...DISTANCES].reverse().map(d => (
               <circle
                 key={`fill-${d}`}
-                cx={focusedToken.x} cy={focusedToken.y}
+                cx={ringAnchor.x} cy={ringAnchor.y}
                 r={RING_RADII[d]}
                 fill={DIST_COLOR[d]} fillOpacity={0.04}
                 stroke="none"
               />
             ))}
+
+            {/* Ring outlines + labels */}
             {DISTANCES.map(d => (
               <g key={d}>
                 <circle
-                  cx={focusedToken.x} cy={focusedToken.y}
+                  cx={ringAnchor.x} cy={ringAnchor.y}
                   r={RING_RADII[d]}
                   fill="none"
                   stroke={DIST_COLOR[d]}
@@ -188,8 +212,8 @@ export default function Graph({
                   strokeOpacity={0.75}
                 />
                 <text
-                  x={focusedToken.x + RING_RADII[d] + 8}
-                  y={focusedToken.y}
+                  x={ringAnchor.x + RING_RADII[d] + 8}
+                  y={ringAnchor.y}
                   dominantBaseline="middle"
                   fontSize={12} fontWeight={600}
                   fill={DIST_COLOR[d]} fillOpacity={0.9}
@@ -198,6 +222,43 @@ export default function Graph({
                 </text>
               </g>
             ))}
+
+            {/* Outline-only rings at the token's CURRENT position (visible only after movement) */}
+            {hasMoved && DISTANCES.map(d => (
+              <circle
+                key={`live-${d}`}
+                cx={focusedToken.x} cy={focusedToken.y}
+                r={RING_RADII[d]}
+                fill="none"
+                stroke={DIST_COLOR[d]}
+                strokeWidth={1}
+                strokeDasharray="3 6"
+                strokeOpacity={0.4}
+              />
+            ))}
+
+            {/* Ghost marker at anchor when token has moved away */}
+            {hasMoved && (
+              <>
+                <circle
+                  cx={ringAnchor.x} cy={ringAnchor.y} r={TOKEN_R}
+                  fill="none"
+                  stroke={TYPE_RING[focusedToken.type]}
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                  strokeOpacity={0.35}
+                />
+                {/* Dashed line from anchor → current token */}
+                <line
+                  x1={ringAnchor.x} y1={ringAnchor.y}
+                  x2={focusedToken.x} y2={focusedToken.y}
+                  stroke="#f1f5f9"
+                  strokeWidth={1.2}
+                  strokeDasharray="5 4"
+                  strokeOpacity={0.4}
+                />
+              </>
+            )}
           </g>
         )}
 
@@ -217,7 +278,6 @@ export default function Graph({
                 className="token-group"
                 style={{
                   cursor: isGM ? (panning ? 'grabbing' : 'grab') : 'default',
-                  // Player view: tokens don't capture pointer events for dragging
                   pointerEvents: isGM ? 'auto' : 'none',
                 }}
                 onClick={e => e.stopPropagation()}
@@ -255,7 +315,6 @@ export default function Graph({
                   {tok.name.length > 11 ? tok.name.slice(0, 10) + '\u2026' : tok.name}
                 </text>
 
-                {/* Delete button — GM only */}
                 {isGM && (
                   <>
                     <circle
@@ -313,8 +372,9 @@ export default function Graph({
       <div className="panel hint">
         {isGM ? (
           <>
-            <strong>Click token</strong> — rings on/off<br />
-            <strong>Drag token</strong> — reposition<br />
+            <strong>Click token</strong> — select &amp; show rings<br />
+            <strong>Drag token</strong> — move (rings stay pinned)<br />
+            <strong>Click selected</strong> — confirm new position<br />
             <strong>Drag canvas</strong> — pan<br />
             <strong>Scroll / buttons</strong> — zoom
           </>
