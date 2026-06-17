@@ -30,3 +30,79 @@ export const TYPE_FILL = { PC: '#1e40af', NPC: '#991b1b' };
 export const TYPE_RING = { PC: '#60a5fa', NPC: '#f87171' };
 
 export const TOKEN_R = 26;
+
+// ── Combat-tracker templates ────────────────────────────────────────────────
+// Combat-relevant fields only (no full Daggerheart stat blocks).
+
+export const DEFAULT_HOPE_MAX = 6;
+
+export const ADVERSARY_TYPES = [
+  'Standard', 'Skulk', 'Ranged', 'Support', 'Horde',
+  'Minion', 'Leader', 'Bruiser', 'Solo', 'Social',
+];
+
+// Adversary library entry (always deployed as an NPC token).
+// Full Daggerheart stat block — combat numbers plus flavour & features.
+export function makeAdversary(over = {}) {
+  return {
+    id: null,
+    name: '',
+    tier: 1,
+    type: 'Standard',
+    description: '',
+    motives: '',
+    difficulty: 10,
+    thresholds: { major: 5, severe: 10 },
+    hpMax: 5,
+    stressMax: 3,
+    atk: '+0',
+    attack: { name: '', range: '', damage: '' },
+    experience: '',
+    features: [],   // [{ name, type: 'Passive'|'Action'|'Reaction', text }]
+    notes: '',
+    ...over,
+  };
+}
+
+// Character (PC) library entry.
+export function makeCharacter(over = {}) {
+  return {
+    id: null,
+    name: '',
+    evasion: 10,
+    armorMax: 0,
+    hpMax: 6,
+    stressMax: 6,
+    thresholds: { major: 7, severe: 12 },
+    hopeMax: DEFAULT_HOPE_MAX,
+    notes: '',
+    ...over,
+  };
+}
+
+export function makeEncounter(over = {}) {
+  return { id: null, name: '', entries: [], ...over };
+}
+
+// Build the live-stat fields for a battle-map token from a library template.
+export function tokenStatsFromCharacter(c) {
+  return {
+    refKind: 'character', refId: c.id,
+    hp: 0, hpMax: c.hpMax,
+    stress: 0, stressMax: c.stressMax,
+    thresholds: { ...c.thresholds },
+    evasion: c.evasion,
+    armorUsed: 0, armorMax: c.armorMax,
+    hope: 0, hopeMax: c.hopeMax ?? DEFAULT_HOPE_MAX,
+  };
+}
+
+export function tokenStatsFromAdversary(a) {
+  return {
+    refKind: 'adversary', refId: a.id,
+    hp: 0, hpMax: a.hpMax,
+    stress: 0, stressMax: a.stressMax,
+    thresholds: { ...a.thresholds },
+    difficulty: a.difficulty,
+  };
+}
