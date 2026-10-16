@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import Dialog from './Dialog';
 import { normName, uniqueName } from '../transfer';
 
 // Per-kind wording. Phases 3–4 add maps and prop templates here.
@@ -51,9 +52,7 @@ export default function ConflictDialog({ conflicts, takenNames, onDone, onAbort 
   const renameOk = renameTo != null && renameTo.trim() && !taken.has(normName(renameTo));
 
   return (
-    <div className="overlay">
-      <div className="modal modal-wide">
-        <h2>Name conflict {conflicts.length > 1 && <span className="lib-count">{index + 1} / {conflicts.length}</span>}</h2>
+    <Dialog title={<>Name conflict {conflicts.length > 1 && <span className="lib-count">{index + 1} / {conflicts.length}</span>}</>} wide>
         <p className="data-hint">
           <b>“{c.incoming.name}”</b> is already in your {k.library}.
         </p>
@@ -67,6 +66,7 @@ export default function ConflictDialog({ conflicts, takenNames, onDone, onAbort 
           <>
             <input
               autoFocus
+              aria-label="New name"
               value={renameTo}
               onChange={e => setRenameTo(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && renameOk) decide('rename', renameTo); }}
@@ -97,7 +97,6 @@ export default function ConflictDialog({ conflicts, takenNames, onDone, onAbort 
           ) : <span />}
           <button className="link-btn" onClick={onAbort}>Abort import</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }

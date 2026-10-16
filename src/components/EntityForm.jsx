@@ -1,4 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
+import Dialog from './Dialog';
+import FeatureEditor from './FeatureEditor';
+import { useConfirm } from './Feedback';
+import { SIZE_PRESETS } from '../constants';
 
 // Read/write a possibly-dotted path (e.g. "thresholds.major") on a draft object.
 function getPath(obj, path) {
@@ -16,110 +20,119 @@ function setPath(obj, path, value) {
   return copy;
 }
 
-// ── Feature (array) <-> text helpers ──
-// One feature per line, fields separated by " :: ":  Name :: Type :: Text
-const FEATURE_TYPES = ['Passive', 'Action', 'Reaction', 'Evolution'];
-function featuresToText(features = []) {
-  return features.map(f => `${f.name} :: ${f.type} :: ${f.text}`).join('\n');
-}
-function textToFeatures(text) {
-  return text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
-    const parts = line.split('::').map(s => s.trim());
-    if (parts.length >= 3) {
-      const type = FEATURE_TYPES.find(t => t.toLowerCase() === parts[1].toLowerCase()) || 'Passive';
-      return { name: parts[0], type, text: parts.slice(2).join(' :: ') };
-    }
-    if (parts.length === 2) return { name: parts[0], type: 'Passive', text: parts[1] };
-    return { name: '', type: 'Passive', text: parts[0] };
-  });
-}
-
 // Generic add/edit modal driven by a field schema.
-//   fields: [{ key, label, type: 'text'|'number'|'textarea'|'select'|'features', options?, full?: bool,
-//              step?, min?, fallback? }]   — number fields: empty or < min saves as `fallback` (default 0)
+//   fields: [{ key, label, type: 'text'|'number'|'textarea'|'select'|'features'|'size', options?, full?: bool,
+//              step?, min?, fallback?, group? }]   — number fields: empty or < min saves as `fallback` (default 0)
+//   Fields sharing a `group` are shown under one heading, in order of first appearance.
 export default function EntityForm({ title, fields, initial, onSave, onClose }) {
   const [draft, setDraft] = useState(initial);
-  const featField = fields.find(f => f.type === 'features');
-  const [featText, setFeatText] = useState(featField ? featuresToText(initial[featField.key]) : '');
-  const firstRef = useRef(null);
+  const [tried, setTried] = useState(false);
+  const confirm = useConfirm();
 
-  useEffect(() => { firstRef.current?.focus(); }, []);
+  const nameMissing = !String(getPath(draft, 'name') ?? '').trim();
+  const dirty = JSON.stringify(draft) !== JSON.stringify(initial);
 
+  const set = (key, val) => setDraft(d => setPath(d, key, val));
   const update = (key, type) => e => {
     const raw = e.target.value;
-    const val = type === 'number' ? (raw === '' ? '' : Number(raw)) : raw;
-    setDraft(d => setPath(d, key, val));
+    set(key, type === 'number' ? (raw === '' ? '' : Number(raw)) : raw);
   };
 
   const save = () => {
-    if (!String(getPath(draft, 'name') ?? '').trim()) return;
+    setTried(true);
+    if (nameMissing) return;
     let out = draft;
     fields.forEach(f => {
       if (f.type !== 'number') return;
       const v = getPath(out, f.key);
       if (v === '' || v == null || (f.min != null && v < f.min)) out = setPath(out, f.key, f.fallback ?? 0);
     });
-    if (featField) out = setPath(out, featField.key, textToFeatures(featText));
     onSave(out);
   };
 
-  const renderInput = (f, i) => {
-    const common = {
-      ref: i === 0 ? firstRef : undefined,
-      onKeyDown: e => { if (e.key === 'Escape') onClose(); },
-    };
+  const close = () => {
+    if (!dirty) { onClose(); return; }
+    confirm({ title: 'Discard changes?', message: 'Your edits to this entry will be lost.', confirmLabel: 'Discard', onConfirm: onClose });
+  };
+
+  const renderInput = f => {
+    const value = getPath(draft, f.key);
     if (f.type === 'features') {
+      return <FeatureEditor value={value ?? []} onChange={v => set(f.key, v)} />;
+    }
+    if (f.type === 'size') {
       return (
-        <textarea
-          rows={5}
-          placeholder="One per line — Name :: Type :: Text"
-          value={featText}
-          onChange={e => setFeatText(e.target.value)}
-        />
+        <div className="size-presets" role="group" aria-label={f.label}>
+          {SIZE_PRESETS.map(([s, label]) => (
+            <button
+              key={s} type="button"
+              className={`stepper-btn ${(value || 1) === s ? 'active' : ''}`}
+              onClick={() => set(f.key, s)}
+              title={`${s * 1.5} m across`}
+              aria-pressed={(value || 1) === s}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       );
     }
     if (f.type === 'select') {
       return (
-        <select value={getPath(draft, f.key) ?? ''} onChange={update(f.key, 'text')}>
+        <select value={value ?? ''} onChange={update(f.key, 'text')}>
           {f.options.map(o => <option key={o} value={o}>{o}</option>)}
         </select>
       );
     }
     if (f.type === 'textarea') {
-      return (
-        <textarea {...common} rows={2} value={getPath(draft, f.key) ?? ''} onChange={update(f.key, f.type)} />
-      );
+      return <textarea rows={2} value={value ?? ''} onChange={update(f.key, f.type)} />;
     }
+    const invalid = f.key === 'name' && tried && nameMissing;
     return (
       <input
-        {...common}
+        autoFocus={f.key === 'name'}
+        className={invalid ? 'invalid' : undefined}
+        aria-invalid={invalid || undefined}
         type={f.type === 'number' ? 'number' : 'text'}
         step={f.step}
         min={f.min}
-        value={getPath(draft, f.key) ?? (f.fallback ?? '')}
+        value={value ?? (f.fallback ?? '')}
         onChange={update(f.key, f.type)}
-        onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') onClose(); }}
+        onKeyDown={e => { if (e.key === 'Enter') save(); }}
       />
     );
   };
 
+  const groups = [];
+  fields.forEach(f => {
+    const g = groups.find(x => x.name === (f.group ?? null));
+    if (g) g.fields.push(f); else groups.push({ name: f.group ?? null, fields: [f] });
+  });
+
   return (
-    <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal modal-wide">
-        <h2>{title}</h2>
-        <div className="form-grid">
-          {fields.map((f, i) => (
-            <label key={f.key} className={`field ${f.full || f.type === 'textarea' || f.type === 'features' ? 'field-full' : ''}`}>
-              <span>{f.label}</span>
-              {renderInput(f, i)}
-            </label>
-          ))}
-        </div>
-        <div className="modal-btns">
-          <button className="btn btn-clr" onClick={onClose}>Cancel</button>
-          <button className="btn btn-pc" onClick={save}>Save</button>
-        </div>
+    <Dialog title={title} onClose={close} wide>
+      {groups.map(g => (
+        <section key={g.name ?? '_'} className="form-group">
+          {g.name && <h3>{g.name}</h3>}
+          <div className="form-grid">
+            {g.fields.map(f => {
+              // Composite inputs hold several controls, so they can't sit inside a <label>.
+              const Wrap = ['features', 'size'].includes(f.type) ? 'div' : 'label';
+              return (
+                <Wrap key={f.key} className={`field ${f.full || ['textarea', 'features'].includes(f.type) ? 'field-full' : ''}`}>
+                  {f.label !== g.name && <span>{f.label}</span>}
+                  {renderInput(f)}
+                  {f.key === 'name' && tried && nameMissing && <em className="field-error">Name is required.</em>}
+                </Wrap>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+      <div className="modal-btns modal-foot">
+        <button className="btn btn-clr" onClick={close}>Cancel</button>
+        <button className="btn btn-pc" onClick={save}>Save</button>
       </div>
-    </div>
+    </Dialog>
   );
 }

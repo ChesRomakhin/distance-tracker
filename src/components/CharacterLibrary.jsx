@@ -1,21 +1,25 @@
 import { useState } from 'react';
 import EntityForm from './EntityForm';
+import LibraryHeader from './LibraryHeader';
+import { useConfirm } from './Feedback';
 import { makeCharacter } from '../constants';
 
 const FIELDS = [
-  { key: 'name',              label: 'Name' },
-  { key: 'evasion',          label: 'Evasion',   type: 'number' },
-  { key: 'armorMax',         label: 'Armor',     type: 'number' },
-  { key: 'hpMax',            label: 'HP',        type: 'number' },
-  { key: 'stressMax',        label: 'Stress',    type: 'number' },
-  { key: 'hopeMax',          label: 'Hope',      type: 'number' },
-  { key: 'thresholds.major', label: 'Major thr.', type: 'number' },
-  { key: 'thresholds.severe',label: 'Severe thr.',type: 'number' },
-  { key: 'notes',            label: 'Notes',      type: 'textarea' },
+  { key: 'name',              label: 'Name',        group: 'Basics', full: true },
+  { key: 'evasion',          label: 'Evasion',     group: 'Defense', type: 'number' },
+  { key: 'armorMax',         label: 'Armor slots', group: 'Defense', type: 'number' },
+  { key: 'thresholds.major', label: 'Major thr.',  group: 'Defense', type: 'number' },
+  { key: 'thresholds.severe',label: 'Severe thr.', group: 'Defense', type: 'number' },
+  { key: 'hpMax',            label: 'HP',          group: 'Resources', type: 'number' },
+  { key: 'stressMax',        label: 'Stress',      group: 'Resources', type: 'number' },
+  { key: 'hopeMax',          label: 'Hope',        group: 'Resources', type: 'number' },
+  { key: 'notes',            label: 'Notes',       group: 'Resources', type: 'textarea' },
 ];
 
-export default function CharacterLibrary({ characters, onAdd, onEdit, onRemove }) {
+export default function CharacterLibrary({ characters, tokens, onAdd, onEdit, onRemove, onAddToMap }) {
   const [editing, setEditing] = useState(null);
+  const [query,   setQuery]   = useState('');
+  const confirm = useConfirm();
 
   const save = entry => {
     if (entry.id == null) onAdd(entry);
@@ -23,21 +27,29 @@ export default function CharacterLibrary({ characters, onAdd, onEdit, onRemove }
     setEditing(null);
   };
 
+  const onMap = new Set(tokens.filter(t => t.refKind === 'character').map(t => t.refId));
+  const q = query.trim().toLowerCase();
+  const shown = q ? characters.filter(c => c.name.toLowerCase().includes(q)) : characters;
+
   return (
     <div className="library">
-      <div className="library-head">
-        <h2>Characters</h2>
-        <button className="btn btn-pc" onClick={() => setEditing(makeCharacter())}>+ New Character</button>
-      </div>
+      <LibraryHeader
+        title="Characters" count={characters.length} shown={shown.length}
+        query={query} onQuery={characters.length > 6 ? setQuery : null}
+        action={<button className="btn btn-pc" onClick={() => setEditing(makeCharacter())}>+ New Character</button>}
+      />
 
-      {characters.length === 0 ? (
-        <p className="library-empty">No characters yet. Create your party here to add them to the map.</p>
+      {shown.length === 0 ? (
+        <p className="library-empty">
+          {characters.length === 0 ? 'No characters yet. Create your party here to add them to the map.' : 'No matches.'}
+        </p>
       ) : (
         <div className="card-grid">
-          {characters.map(c => (
+          {shown.map(c => (
             <div key={c.id} className="entity-card pc-card">
               <div className="entity-card-head">
                 <span className="entity-name">{c.name}</span>
+                {onMap.has(c.id) && <span className="entity-tag on-map-tag">on map</span>}
               </div>
               <div className="stat-row">
                 <span className="stat-pill">Eva <b>{c.evasion}</b></span>
@@ -49,8 +61,18 @@ export default function CharacterLibrary({ characters, onAdd, onEdit, onRemove }
               </div>
               {c.notes && <div className="entity-line entity-notes">{c.notes}</div>}
               <div className="entity-card-btns">
+                <button className="btn btn-pc btn-sm" onClick={() => onAddToMap(c)}>+ Map</button>
                 <button className="btn btn-clr btn-sm" onClick={() => setEditing(c)}>Edit</button>
-                <button className="btn btn-clr btn-sm" onClick={() => onRemove(c.id)}>Delete</button>
+                <button
+                  className="btn btn-ghost-danger btn-sm"
+                  onClick={() => confirm({
+                    title: `Delete ${c.name}?`,
+                    message: 'This removes the character from your library. Tokens already on the map stay.',
+                    onConfirm: () => onRemove(c.id),
+                  })}
+                >
+                  Delete
+                </button>
               </div>
             </div>
           ))}

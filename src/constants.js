@@ -1,11 +1,21 @@
 export const DISTANCES = ['Melee', 'Very Close', 'Close', 'Far', 'Very Far'];
 
+// Hues step from hot to cold so neighbouring bands never look alike.
 export const DIST_COLOR = {
-  'Melee':      '#e11d48',
-  'Very Close': '#ef4444',
-  'Close':      '#f97316',
+  'Melee':      '#ef4444',
+  'Very Close': '#f97316',
+  'Close':      '#eab308',
   'Far':        '#3b82f6',
-  'Very Far':   '#7c3aed',
+  'Very Far':   '#a855f7',
+};
+
+// Short tags for distance badges on the map
+export const DIST_SHORT = {
+  'Melee':      'M',
+  'Very Close': 'VC',
+  'Close':      'C',
+  'Far':        'F',
+  'Very Far':   'VF',
 };
 
 // ── World scale ─────────────────────────────────────────────────────────────
@@ -37,10 +47,62 @@ export const TYPE_RING = { PC: '#60a5fa', NPC: '#f87171' };
 export const TOKEN_DIAMETER_M = 1.5;
 export const tokenRadiusM = tok => (TOKEN_DIAMETER_M / 2) * (tok.size || 1);
 
+// Token size presets (multiplier; 1 = 1.5 m across)
+export const SIZE_PRESETS = [[0.5, '½'], [1, '1'], [2, '2'], [3, '3'], [4, '4']];
+
 // Ring radius around a token, measured from its edge to the edge of a
 // standard-size target — so larger tokens push their rings outward.
 export const ringRadiusM = (d, tok) =>
   DIST_METERS[d] + tokenRadiusM(tok) - TOKEN_DIAMETER_M / 2;
+
+// Range between two tokens on the same scale as the rings: two standard-size
+// tokens touching are 0 m apart; bigger tokens count as closer by their extra radius.
+// `from` optionally overrides a's position (e.g. the pinned ring anchor).
+export function rangeM(a, b, from = a) {
+  const centre = Math.hypot(b.x - from.x, b.y - from.y);
+  return Math.max(0, centre - tokenRadiusM(a) - tokenRadiusM(b) + TOKEN_DIAMETER_M);
+}
+
+// The range band a distance in metres falls into.
+export function bandOf(m) {
+  return DISTANCES.find(d => DIST_METERS[d] != null && m <= DIST_METERS[d] + 1e-6) ?? 'Very Far';
+}
+
+// Free spots for new tokens: grid points nearest `center` (metres) that don't
+// overlap existing tokens or each other. `sizes` = one size multiplier per token.
+export function spawnPositions(sizes, tokens, center) {
+  const GAP  = 1.5;   // one square between neighbours
+  const STEP = TOKEN_DIAMETER_M + GAP;
+  const placed = tokens.map(t => ({ x: t.x, y: t.y, r: tokenRadiusM(t) }));
+  const candidates = [];
+  for (let i = -14; i <= 14; i++) {
+    for (let j = -10; j <= 10; j++) {
+      const x = center.x + i * STEP, y = center.y + j * STEP;
+      candidates.push({ x, y, d: Math.hypot(i, j * 1.15) });
+    }
+  }
+  candidates.sort((a, b) => a.d - b.d);
+
+  return sizes.map(size => {
+    const r = (TOKEN_DIAMETER_M / 2) * (size || 1);
+    const spot = candidates.find(c => placed.every(p => Math.hypot(p.x - c.x, p.y - c.y) >= p.r + r + GAP))
+      ?? { x: center.x + (Math.random() - 0.5) * 6, y: center.y + (Math.random() - 0.5) * 6 };
+    placed.push({ x: spot.x, y: spot.y, r });
+    return { x: spot.x, y: spot.y };
+  });
+}
+
+// Copies deployed from an encounter are named "Name 2"; split off the number
+// so it can be shown as a badge and survives truncation.
+export function tokenLabel(name, maxLen = 14) {
+  const m = name.trim().match(/^(.*\S)\s+(\d+)$/);
+  const base = m ? m[1] : name.trim();
+  const num  = m ? m[2] : null;
+  const initials = base.split(/[\s:]+/).filter(Boolean).map(w => w[0]).join('').toUpperCase().slice(0, 2) || '?';
+  const room  = maxLen - (num ? num.length + 1 : 0);
+  const short = (base.length > room ? base.slice(0, room - 1).trimEnd() + '…' : base) + (num ? ` ${num}` : '');
+  return { initials, num, short };
+}
 
 // ── Combat-tracker templates ────────────────────────────────────────────────
 // Combat-relevant fields only (no full Daggerheart stat blocks).

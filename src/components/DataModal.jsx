@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ConflictDialog from './ConflictDialog';
+import Dialog from './Dialog';
 import {
   buildBackup, buildSelection, downloadJson, backupFileName, selectionFileName,
   parseImport, findConflicts, applyImport, normName,
@@ -118,9 +119,7 @@ export default function DataModal({ state, onImport, onClose }) {
 
   return (
     <>
-      <div className="overlay" onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="modal modal-wide">
-          <h2>Data</h2>
+      <Dialog title="Data" onClose={pending ? undefined : onClose} wide>
           <div className="data-tabs">
             <button className={`tab ${tab === 'export' ? 'active' : ''}`} onClick={() => setTab('export')}>Export</button>
             <button className={`tab ${tab === 'import' ? 'active' : ''}`} onClick={() => setTab('import')}>Import</button>
@@ -166,8 +165,7 @@ export default function DataModal({ state, onImport, onClose }) {
               </div>
             </>
           )}
-        </div>
-      </div>
+      </Dialog>
 
       {pending && (
         <ConflictDialog
