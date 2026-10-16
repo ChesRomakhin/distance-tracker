@@ -70,7 +70,7 @@ export function makeAdversary(over = {}) {
     atk: '+0',
     attack: { name: '', range: '', damage: '' },
     experience: '',
-    features: [],   // [{ name, type: 'Passive'|'Action'|'Reaction', text }]
+    features: [],   // [{ name, type: 'Passive'|'Action'|'Reaction'|'Evolution', text }]
     notes: '',
     ...over,
   };

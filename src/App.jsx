@@ -23,7 +23,9 @@ const CHANNEL = new BroadcastChannel('daggerheart-tracker');
 // Fresh GMs start with the full SRD adversary library pre-loaded.
 const SEED_ADVERSARIES = SRD_ADVERSARIES.map((a, i) => ({ ...a, id: i + 1 }));
 
-const SEED_VERSION = 1;   // bump to re-seed the SRD library for returning GMs
+// Bump to re-seed the SRD library for returning GMs (add changes to srdUpdates.js).
+// 2 — SRD 2.0 adversaries.
+const SEED_VERSION = 2;
 
 // Bump when stored board data becomes incompatible (the board is cleared on load).
 // 2 — token coordinates switched from pixels to metres.

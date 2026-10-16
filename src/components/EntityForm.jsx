@@ -18,7 +18,7 @@ function setPath(obj, path, value) {
 
 // ── Feature (array) <-> text helpers ──
 // One feature per line, fields separated by " :: ":  Name :: Type :: Text
-const FEATURE_TYPES = ['Passive', 'Action', 'Reaction'];
+const FEATURE_TYPES = ['Passive', 'Action', 'Reaction', 'Evolution'];
 function featuresToText(features = []) {
   return features.map(f => `${f.name} :: ${f.type} :: ${f.text}`).join('\n');
 }

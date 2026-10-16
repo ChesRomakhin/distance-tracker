@@ -23,7 +23,7 @@ export function uniqueName(name, taken) {
 }
 
 // JSON with sorted keys, so key order doesn't affect comparison.
-function canon(v) {
+export function canon(v) {
   if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
   if (v && typeof v === 'object') {
     return `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canon(v[k])}`).join(',')}}`;

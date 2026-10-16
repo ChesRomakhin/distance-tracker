@@ -1,7 +1,23 @@
 // Tiny localStorage persistence layer for the GM's data.
 // Players never read/write storage — they receive state over the BroadcastChannel.
 
+import { SRD_UPDATES } from './srdUpdates';
+import { canon } from './transfer';
+
 const KEY = 'daggerheart-tracker-v1';
+
+function applySrdUpdates(adversaries, updates) {
+  const byName = new Map(updates.map(u => [u.name, u.fields]));
+  return adversaries.map(a => {
+    const fields = byName.get(a.name);
+    if (!fields) return a;
+    const next = { ...a };
+    for (const [key, [from, to]] of Object.entries(fields)) {
+      if (canon(a[key]) === canon(from)) next[key] = to;
+    }
+    return next;
+  });
+}
 
 export function loadState(fallback) {
   try {
@@ -18,9 +34,13 @@ export function loadState(fallback) {
     }
 
     // Seed (or top up) the SRD adversary library when the stored seed version is
-    // behind. Adds only entries the user doesn't already have (matched by name),
-    // so a returning GM keeps their own edits/additions.
+    // behind. SRD entries are updated field by field, but only where they still
+    // hold the old SRD value; then entries the user doesn't have (matched by name)
+    // are added — so a returning GM keeps their own edits/additions.
     if (parsed.seedVersion !== fallback.seedVersion) {
+      for (let v = (parsed.seedVersion || 0) + 1; v <= fallback.seedVersion; v++) {
+        merged.adversaries = applySrdUpdates(merged.adversaries || [], SRD_UPDATES[v] || []);
+      }
       const existing = new Set((merged.adversaries || []).map(a => a.name));
       let nextId = merged.nextId || 1;
       const added = (fallback.adversaries || [])
