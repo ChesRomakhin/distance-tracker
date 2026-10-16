@@ -2,6 +2,9 @@ import { useState } from 'react';
 import StatStepper from './StatStepper';
 import { TYPE_FILL } from '../constants';
 
+// Token size presets (multiplier; 1 = 1.5 m across)
+const SIZE_PRESETS = [[0.5, '½'], [1, '1'], [2, '2'], [3, '3'], [4, '4']];
+
 function SelectedUnit({ token, source, onUpdateStats, onRemoveToken, onDeselect }) {
   const isPC  = token.refKind === 'character';
   const isAdv = token.refKind === 'adversary';
@@ -35,6 +38,22 @@ function SelectedUnit({ token, source, onUpdateStats, onRemoveToken, onDeselect 
             )}
           </>
         )}
+
+        <div className="stepper">
+          <span className="stepper-label">Size</span>
+          <div className="stepper-controls">
+            {SIZE_PRESETS.map(([s, label]) => (
+              <button
+                key={s}
+                className={`stepper-btn ${(token.size || 1) === s ? 'active' : ''}`}
+                onClick={() => set({ size: s })}
+                title={`${s * 1.5} m across`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="sp-static">

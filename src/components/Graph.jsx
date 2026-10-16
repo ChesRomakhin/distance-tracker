@@ -1,12 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  DISTANCES, DIST_COLOR, DIST_LABEL, RING_RADII,
-  TYPE_FILL, TYPE_RING, TOKEN_R,
+  DISTANCES, DIST_COLOR, DIST_LABEL, DIST_METERS,
+  TYPE_FILL, TYPE_RING, PX_PER_M, toPx, tokenRadiusM, ringRadiusM,
 } from '../constants';
 
 const ZOOM_MIN  = 0.12;
 const ZOOM_MAX  = 10;
 const ZOOM_STEP = 1.3;
+
+// Bands that get a ring (Very Far is open-ended — legend only).
+const RING_DISTANCES = DISTANCES.filter(d => DIST_METERS[d] != null);
 
 export default function Graph({
   tokens,
@@ -30,9 +33,14 @@ export default function Graph({
   const focusedToken = tokens.find(t => t.id === focusedId) ?? null;
   const viewBox = `${viewport.panX} ${viewport.panY} ${dims.width / viewport.zoom} ${dims.height / viewport.zoom}`;
 
-  // Has the focused token moved away from its anchor?
+  // Has the focused token moved away from its anchor? (metres; ≈ 1 px at zoom 1)
   const hasMoved = focusedToken && ringAnchor &&
-    (Math.abs(focusedToken.x - ringAnchor.x) > 1 || Math.abs(focusedToken.y - ringAnchor.y) > 1);
+    (Math.abs(focusedToken.x - ringAnchor.x) > 0.03 || Math.abs(focusedToken.y - ringAnchor.y) > 0.03);
+
+  // Ring geometry in screen-space pixels (world is in metres)
+  const anchorPx  = ringAnchor && { x: toPx(ringAnchor.x), y: toPx(ringAnchor.y) };
+  const focusedPx = focusedToken && { x: toPx(focusedToken.x), y: toPx(focusedToken.y) };
+  const ringR     = d => toPx(ringRadiusM(d, focusedToken));
 
   // ── Resize observer ────────────────────────────────────────────────────
   useEffect(() => {
@@ -87,13 +95,13 @@ export default function Graph({
 
     const x0 = e.clientX, y0 = e.clientY;
     const tx0 = tok.x,   ty0 = tok.y;
-    const z   = viewport.zoom;
+    const k   = viewport.zoom * PX_PER_M;   // screen px per metre
     let moved = false;
 
     const onMove = mv => {
       const dsx = mv.clientX - x0, dsy = mv.clientY - y0;
       if (!moved && dsx * dsx + dsy * dsy > 9) moved = true;
-      if (moved) onMoveToken(tokenId, tx0 + dsx / z, ty0 + dsy / z);
+      if (moved) onMoveToken(tokenId, tx0 + dsx / k, ty0 + dsy / k);
     };
     const onUp = () => {
       if (!moved) {
@@ -118,7 +126,7 @@ export default function Graph({
     const t0  = e.touches[0];
     const x0  = t0.clientX, y0  = t0.clientY;
     const tx0 = tok.x,      ty0 = tok.y;
-    const z   = viewport.zoom;
+    const k   = viewport.zoom * PX_PER_M;   // screen px per metre
     let moved = false;
 
     const onMove = mv => {
@@ -126,7 +134,7 @@ export default function Graph({
       const t = mv.touches[0];
       const dsx = t.clientX - x0, dsy = t.clientY - y0;
       if (!moved && dsx * dsx + dsy * dsy > 25) moved = true;
-      if (moved) onMoveToken(tokenId, tx0 + dsx / z, ty0 + dsy / z);
+      if (moved) onMoveToken(tokenId, tx0 + dsx / k, ty0 + dsy / k);
     };
     const onEnd = () => {
       if (!moved) {
@@ -189,22 +197,22 @@ export default function Graph({
         {ringAnchor && focusedToken && (
           <g className="rings-group" style={{ pointerEvents: 'none' }}>
             {/* Zone fills (outermost first) */}
-            {[...DISTANCES].reverse().map(d => (
+            {[...RING_DISTANCES].reverse().map(d => (
               <circle
                 key={`fill-${d}`}
-                cx={ringAnchor.x} cy={ringAnchor.y}
-                r={RING_RADII[d]}
+                cx={anchorPx.x} cy={anchorPx.y}
+                r={ringR(d)}
                 fill={DIST_COLOR[d]} fillOpacity={0.04}
                 stroke="none"
               />
             ))}
 
             {/* Ring outlines + labels */}
-            {DISTANCES.map(d => (
+            {RING_DISTANCES.map(d => (
               <g key={d}>
                 <circle
-                  cx={ringAnchor.x} cy={ringAnchor.y}
-                  r={RING_RADII[d]}
+                  cx={anchorPx.x} cy={anchorPx.y}
+                  r={ringR(d)}
                   fill="none"
                   stroke={DIST_COLOR[d]}
                   strokeWidth={1.5}
@@ -212,8 +220,8 @@ export default function Graph({
                   strokeOpacity={0.75}
                 />
                 <text
-                  x={ringAnchor.x + RING_RADII[d] + 8}
-                  y={ringAnchor.y}
+                  x={anchorPx.x + ringR(d) + 8}
+                  y={anchorPx.y}
                   dominantBaseline="middle"
                   fontSize={12} fontWeight={600}
                   fill={DIST_COLOR[d]} fillOpacity={0.9}
@@ -224,11 +232,11 @@ export default function Graph({
             ))}
 
             {/* Outline-only rings at the token's CURRENT position (visible only after movement) */}
-            {hasMoved && DISTANCES.map(d => (
+            {hasMoved && RING_DISTANCES.map(d => (
               <circle
                 key={`live-${d}`}
-                cx={focusedToken.x} cy={focusedToken.y}
-                r={RING_RADII[d]}
+                cx={focusedPx.x} cy={focusedPx.y}
+                r={ringR(d)}
                 fill="none"
                 stroke={DIST_COLOR[d]}
                 strokeWidth={1}
@@ -241,7 +249,7 @@ export default function Graph({
             {hasMoved && (
               <>
                 <circle
-                  cx={ringAnchor.x} cy={ringAnchor.y} r={TOKEN_R}
+                  cx={anchorPx.x} cy={anchorPx.y} r={toPx(tokenRadiusM(focusedToken))}
                   fill="none"
                   stroke={TYPE_RING[focusedToken.type]}
                   strokeWidth={1.5}
@@ -250,8 +258,8 @@ export default function Graph({
                 />
                 {/* Dashed line from anchor → current token */}
                 <line
-                  x1={ringAnchor.x} y1={ringAnchor.y}
-                  x2={focusedToken.x} y2={focusedToken.y}
+                  x1={anchorPx.x} y1={anchorPx.y}
+                  x2={focusedPx.x} y2={focusedPx.y}
                   stroke="#f1f5f9"
                   strokeWidth={1.2}
                   strokeDasharray="5 4"
@@ -269,8 +277,11 @@ export default function Graph({
             const ini = tok.name.trim()
               .split(/\s+/).map(w => w[0] ?? '').join('')
               .toUpperCase().slice(0, 2) || '?';
-            const delX = tok.x + TOKEN_R - 4;
-            const delY = tok.y - TOKEN_R + 4;
+            // Screen-space geometry (world is in metres)
+            const x = toPx(tok.x), y = toPx(tok.y);
+            const r = toPx(tokenRadiusM(tok));
+            const delX = x + r * 0.85;
+            const delY = y - r * 0.85;
 
             return (
               <g
@@ -286,29 +297,29 @@ export default function Graph({
               >
                 {isFocused && (
                   <circle
-                    cx={tok.x} cy={tok.y} r={TOKEN_R + 7}
+                    cx={x} cy={y} r={r + 7}
                     fill="none" stroke="#f1f5f9"
                     strokeWidth={2.5} strokeOpacity={0.9}
                     style={{ pointerEvents: 'none' }}
                   />
                 )}
-                <circle cx={tok.x + 2} cy={tok.y + 3} r={TOKEN_R} fill="rgba(0,0,0,0.35)" />
+                <circle cx={x + 2} cy={y + 3} r={r} fill="rgba(0,0,0,0.35)" />
                 <circle
-                  cx={tok.x} cy={tok.y} r={TOKEN_R}
+                  cx={x} cy={y} r={r}
                   fill={TYPE_FILL[tok.type]}
                   stroke={isFocused ? '#f1f5f9' : TYPE_RING[tok.type]}
                   strokeWidth={2.5}
                 />
                 <text
-                  x={tok.x} y={tok.y}
+                  x={x} y={y}
                   textAnchor="middle" dominantBaseline="middle"
-                  fontSize={13} fontWeight={800} fill="white"
+                  fontSize={Math.max(11, Math.round(r * 0.5))} fontWeight={800} fill="white"
                   style={{ pointerEvents: 'none', userSelect: 'none' }}
                 >
                   {ini}
                 </text>
                 <text
-                  x={tok.x} y={tok.y + TOKEN_R + 13}
+                  x={x} y={y + r + 13}
                   textAnchor="middle" fontSize={10} fill="#94a3b8"
                   style={{ pointerEvents: 'none', userSelect: 'none' }}
                 >

@@ -11,6 +11,7 @@ const FIELDS = [
   { key: 'stressMax',        label: 'Stress',     type: 'number' },
   { key: 'thresholds.major', label: 'Major thr.', type: 'number' },
   { key: 'thresholds.severe',label: 'Severe thr.',type: 'number' },
+  { key: 'size',             label: 'Size ×',     type: 'number', step: 0.5, min: 0.5, fallback: 1 },
   { key: 'atk',              label: 'ATK mod' },
   { key: 'attack.name',      label: 'Attack' },
   { key: 'attack.range',     label: 'Range' },
@@ -74,6 +75,7 @@ export default function AdversaryLibrary({ adversaries, onAdd, onEdit, onRemove 
                 <span className="stat-pill">Thr <b>{thr(a.thresholds)}</b></span>
                 <span className="stat-pill">HP <b>{a.hpMax}</b></span>
                 <span className="stat-pill">Stress <b>{a.stressMax}</b></span>
+                {(a.size || 1) !== 1 && <span className="stat-pill">Size <b>×{a.size}</b></span>}
               </div>
               {a.attack?.name && (
                 <div className="entity-line">

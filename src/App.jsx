@@ -5,7 +5,7 @@ import AdversaryLibrary from './components/AdversaryLibrary';
 import CharacterLibrary from './components/CharacterLibrary';
 import EncounterBuilder from './components/EncounterBuilder';
 import BattleSidePanel from './components/BattleSidePanel';
-import { tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter } from './constants';
+import { tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter, PX_PER_M } from './constants';
 import { SRD_ADVERSARIES } from './adversaryData';
 import { loadState, saveState } from './storage';
 import './App.css';
@@ -21,6 +21,10 @@ const SEED_ADVERSARIES = SRD_ADVERSARIES.map((a, i) => ({ ...a, id: i + 1 }));
 
 const SEED_VERSION = 1;   // bump to re-seed the SRD library for returning GMs
 
+// Bump when stored board data becomes incompatible (the board is cleared on load).
+// 2 — token coordinates switched from pixels to metres.
+const SCHEMA_VERSION = 2;
+
 const initial = {
   tokens: [],
   adversaries: SEED_ADVERSARIES,
@@ -28,6 +32,7 @@ const initial = {
   encounters: [],
   nextId: SEED_ADVERSARIES.length + 1,
   seedVersion: SEED_VERSION,
+  schemaVersion: SCHEMA_VERSION,
 };
 
 function reducer(state, action) {
@@ -38,7 +43,7 @@ function reducer(state, action) {
         tokens: [...state.tokens, {
           id: state.nextId, name: action.name, type: action.tokenType,
           x: action.x, y: action.y,
-          refKind: 'custom',
+          refKind: 'custom', size: 1,
           ...(action.stats || {}),
         }],
         nextId: state.nextId + 1,
@@ -207,10 +212,10 @@ export default function App() {
     return () => CHANNEL.removeEventListener('message', handler);
   }, []);
 
-  // ── Token spawn ────────────────────────────────────────────────────────────
+  // ── Token spawn (metres; lands inside the default view) ────────────────────
   const spawnXY = () => ({
-    x: 140 + Math.random() * Math.max(200, window.innerWidth  - 280),
-    y: 100 + Math.random() * Math.max(200, window.innerHeight - 220),
+    x: (140 + Math.random() * Math.max(200, window.innerWidth  - 280)) / PX_PER_M,
+    y: (100 + Math.random() * Math.max(200, window.innerHeight - 220)) / PX_PER_M,
   });
 
   const handleAddToken = (name, type, stats) => {

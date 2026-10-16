@@ -10,6 +10,13 @@ export function loadState(fallback) {
     const parsed = JSON.parse(raw);
     const merged = { ...fallback, ...parsed };
 
+    // Board data from an older schema can't be reused (e.g. pixel coordinates
+    // before the switch to metres) — clear the board, keep libraries/encounters.
+    if (parsed.schemaVersion !== fallback.schemaVersion) {
+      merged.tokens = [];
+      merged.schemaVersion = fallback.schemaVersion;
+    }
+
     // Seed (or top up) the SRD adversary library when the stored seed version is
     // behind. Adds only entries the user doesn't already have (matched by name),
     // so a returning GM keeps their own edits/additions.

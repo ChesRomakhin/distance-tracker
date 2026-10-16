@@ -35,7 +35,8 @@ function textToFeatures(text) {
 }
 
 // Generic add/edit modal driven by a field schema.
-//   fields: [{ key, label, type: 'text'|'number'|'textarea'|'select'|'features', options?, full?: bool }]
+//   fields: [{ key, label, type: 'text'|'number'|'textarea'|'select'|'features', options?, full?: bool,
+//              step?, min?, fallback? }]   — number fields: empty or < min saves as `fallback` (default 0)
 export default function EntityForm({ title, fields, initial, onSave, onClose }) {
   const [draft, setDraft] = useState(initial);
   const featField = fields.find(f => f.type === 'features');
@@ -54,7 +55,9 @@ export default function EntityForm({ title, fields, initial, onSave, onClose }) 
     if (!String(getPath(draft, 'name') ?? '').trim()) return;
     let out = draft;
     fields.forEach(f => {
-      if (f.type === 'number' && getPath(out, f.key) === '') out = setPath(out, f.key, 0);
+      if (f.type !== 'number') return;
+      const v = getPath(out, f.key);
+      if (v === '' || v == null || (f.min != null && v < f.min)) out = setPath(out, f.key, f.fallback ?? 0);
     });
     if (featField) out = setPath(out, featField.key, textToFeatures(featText));
     onSave(out);
@@ -91,7 +94,9 @@ export default function EntityForm({ title, fields, initial, onSave, onClose }) 
       <input
         {...common}
         type={f.type === 'number' ? 'number' : 'text'}
-        value={getPath(draft, f.key) ?? ''}
+        step={f.step}
+        min={f.min}
+        value={getPath(draft, f.key) ?? (f.fallback ?? '')}
         onChange={update(f.key, f.type)}
         onKeyDown={e => { if (e.key === 'Enter') save(); if (e.key === 'Escape') onClose(); }}
       />
