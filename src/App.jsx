@@ -5,7 +5,11 @@ import AdversaryLibrary from './components/AdversaryLibrary';
 import CharacterLibrary from './components/CharacterLibrary';
 import EncounterBuilder from './components/EncounterBuilder';
 import BattleSidePanel from './components/BattleSidePanel';
-import { tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter, PX_PER_M } from './constants';
+import DataModal from './components/DataModal';
+import {
+  tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter, findEncounterAdversary, PX_PER_M,
+} from './constants';
+import { applyImport, buildSelection, downloadJson, encounterFileName } from './transfer';
 import { SRD_ADVERSARIES } from './adversaryData';
 import { loadState, saveState } from './storage';
 import './App.css';
@@ -137,6 +141,10 @@ function reducer(state, action) {
     case 'REMOVE_ENCOUNTER':
       return { ...state, encounters: state.encounters.filter(e => e.id !== action.id) };
 
+    // ── Import (one atomic step) ──
+    case 'IMPORT':
+      return applyImport(state, action.file, action.resolutions).state;
+
     default:
       return state;
   }
@@ -152,6 +160,7 @@ export default function App() {
   );
   const [view,       setView]       = useState('map');   // 'map'|'adversaries'|'characters'|'encounters'
   const [modal,      setModal]      = useState(null);
+  const [dataOpen,   setDataOpen]   = useState(false);
   const [focusedId,  setFocusedId]  = useState(null);
   const [ringAnchor, setRingAnchor] = useState(null);    // { x, y } — where rings are pinned
 
@@ -237,7 +246,7 @@ export default function App() {
 
   const handleDeployEncounter = enc => {
     enc.entries.forEach(({ adversaryId, count }) => {
-      const adv = state.adversaries.find(a => a.id === adversaryId);
+      const adv = findEncounterAdversary(enc, adversaryId, state.adversaries);
       if (!adv) return;
       for (let i = 0; i < count; i++) {
         const label = count > 1 ? `${adv.name} ${i + 1}` : adv.name;
@@ -254,6 +263,14 @@ export default function App() {
 
   const handleUpdateTokenStats = (id, patch) =>
     dispatch({ type: 'UPDATE_TOKEN_STATS', id, patch });
+
+  const handleExportEncounter = enc =>
+    downloadJson(buildSelection(state, { encounterIds: [enc.id] }), encounterFileName(enc));
+
+  // Library first, then adversaries that live inside encounters (imported ones).
+  const findAdversary = id =>
+    state.adversaries.find(a => a.id === id) ??
+    state.encounters.flatMap(e => e.adversaries ?? []).find(a => a.id === id);
 
   const focusedToken = state.tokens.find(t => t.id === focusedId) ?? null;
   const isGM = ROLE === 'gm';
@@ -284,18 +301,21 @@ export default function App() {
                 </button>
               ))}
             </nav>
-            {view === 'map' && (
-              <div className="toolbar">
-                <button className="btn btn-pc"  onClick={() => setModal('PC')}>+ PC</button>
-                <button className="btn btn-npc" onClick={() => setModal('NPC')}>+ NPC / Enemy</button>
-                <button
-                  className="btn btn-clr"
-                  onClick={() => { dispatch({ type: 'CLEAR' }); setFocusedId(null); setRingAnchor(null); }}
-                >
-                  Clear
-                </button>
-              </div>
-            )}
+            <div className="toolbar">
+              {view === 'map' && (
+                <>
+                  <button className="btn btn-pc"  onClick={() => setModal('PC')}>+ PC</button>
+                  <button className="btn btn-npc" onClick={() => setModal('NPC')}>+ NPC / Enemy</button>
+                  <button
+                    className="btn btn-clr"
+                    onClick={() => { dispatch({ type: 'CLEAR' }); setFocusedId(null); setRingAnchor(null); }}
+                  >
+                    Clear
+                  </button>
+                </>
+              )}
+              <button className="btn btn-clr" onClick={() => setDataOpen(true)} title="Export / import JSON">Data</button>
+            </div>
           </>
         ) : (
           <span className="role-badge role-player">PLAYER VIEW</span>
@@ -319,6 +339,7 @@ export default function App() {
               <BattleSidePanel
                 characters={state.characters}
                 adversaries={state.adversaries}
+                findAdversary={findAdversary}
                 focusedToken={focusedToken}
                 onQuickAddCharacter={handleQuickAddCharacter}
                 onQuickAddAdversary={handleQuickAddAdversary}
@@ -356,6 +377,7 @@ export default function App() {
             onEdit={entry => dispatch({ type: 'EDIT_ENCOUNTER', entry })}
             onRemove={id => dispatch({ type: 'REMOVE_ENCOUNTER', id })}
             onDeploy={handleDeployEncounter}
+            onExport={handleExportEncounter}
           />
         )}
       </main>
@@ -365,6 +387,14 @@ export default function App() {
           type={modal}
           onConfirm={name => handleAddCustomToken(name, modal)}
           onClose={() => setModal(null)}
+        />
+      )}
+
+      {dataOpen && (
+        <DataModal
+          state={state}
+          onImport={(file, resolutions) => dispatch({ type: 'IMPORT', file, resolutions })}
+          onClose={() => setDataOpen(false)}
         />
       )}
     </div>

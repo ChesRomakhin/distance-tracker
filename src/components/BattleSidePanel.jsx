@@ -134,12 +134,12 @@ function QuickAddList({ title, items, color, onAdd, emptyHint }) {
 }
 
 export default function BattleSidePanel({
-  characters, adversaries, focusedToken,
+  characters, adversaries, findAdversary, focusedToken,
   onQuickAddCharacter, onQuickAddAdversary,
   onUpdateStats, onRemoveToken, onDeselect,
 }) {
   const source = focusedToken?.refKind === 'adversary'
-    ? adversaries.find(a => a.id === focusedToken.refId)
+    ? findAdversary(focusedToken.refId)
     : focusedToken?.refKind === 'character'
       ? characters.find(c => c.id === focusedToken.refId)
       : null;

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { makeEncounter } from '../constants';
+import { makeEncounter, findEncounterAdversary } from '../constants';
 
 function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
   const [draft, setDraft] = useState(initial);
@@ -25,7 +25,15 @@ function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
   const removeEntry = id =>
     setDraft(d => ({ ...d, entries: d.entries.filter(e => e.adversaryId !== id) }));
 
-  const nameOf = id => adversaries.find(a => a.id === id)?.name ?? '(deleted)';
+  const nameOf = id => findEncounterAdversary(draft, id, adversaries)?.name ?? '(deleted)';
+  const isLocal = id => draft.adversaries?.some(a => a.id === id);
+
+  // Drop local adversaries that no entry uses any more.
+  const save = () => {
+    if (!draft.name.trim()) return;
+    const used = new Set(draft.entries.map(e => e.adversaryId));
+    onSave({ ...draft, adversaries: (draft.adversaries ?? []).filter(a => used.has(a.id)) });
+  };
   const totalUnits = draft.entries.reduce((n, e) => n + e.count, 0);
 
   return (
@@ -53,7 +61,10 @@ function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
         <div className="enc-rows">
           {draft.entries.map(e => (
             <div key={e.adversaryId} className="enc-row">
-              <span className="enc-row-name">{nameOf(e.adversaryId)}</span>
+              <span className="enc-row-name">
+                {nameOf(e.adversaryId)}
+                {isLocal(e.adversaryId) && <span className="stat-pill enc-local" title="Came with an imported file; not in the library">local</span>}
+              </span>
               <div className="enc-count">
                 <button className="stepper-btn" onClick={() => setCount(e.adversaryId, Math.max(1, e.count - 1))}>−</button>
                 <span className="stepper-value">{e.count}</span>
@@ -68,13 +79,13 @@ function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
 
       <div className="modal-btns">
         <button className="btn btn-clr" onClick={onCancel}>Cancel</button>
-        <button className="btn btn-pc" onClick={() => draft.name.trim() && onSave(draft)}>Save</button>
+        <button className="btn btn-pc" onClick={save}>Save</button>
       </div>
     </div>
   );
 }
 
-export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdit, onRemove, onDeploy }) {
+export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdit, onRemove, onDeploy, onExport }) {
   const [editing, setEditing] = useState(null);
 
   const save = entry => {
@@ -118,13 +129,14 @@ export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdi
                 {enc.entries.length === 0
                   ? '(empty)'
                   : enc.entries.map(e => {
-                      const a = adversaries.find(x => x.id === e.adversaryId);
+                      const a = findEncounterAdversary(enc, e.adversaryId, adversaries);
                       return `${a?.name ?? '(deleted)'} ×${e.count}`;
                     }).join(', ')}
               </div>
               <div className="entity-card-btns">
                 <button className="btn btn-npc btn-sm" onClick={() => onDeploy(enc)} disabled={!enc.entries.length}>Deploy to map</button>
                 <button className="btn btn-clr btn-sm" onClick={() => setEditing(enc)}>Edit</button>
+                <button className="btn btn-clr btn-sm" onClick={() => onExport(enc)} title="Download as a file with its adversaries">Export</button>
                 <button className="btn btn-clr btn-sm" onClick={() => onRemove(enc.id)}>Delete</button>
               </div>
             </div>

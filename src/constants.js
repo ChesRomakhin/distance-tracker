@@ -92,9 +92,16 @@ export function makeCharacter(over = {}) {
   };
 }
 
+// entries: [{ adversaryId, count }]. `adversaries` holds encounter-local copies
+// (from an imported file) that are not in the library.
 export function makeEncounter(over = {}) {
-  return { id: null, name: '', entries: [], ...over };
+  return { id: null, name: '', entries: [], adversaries: [], ...over };
 }
+
+// Entries look in the encounter's own adversaries first, then in the library.
+// Ids come from one global counter, so the two never collide.
+export const findEncounterAdversary = (enc, id, library) =>
+  enc.adversaries?.find(a => a.id === id) ?? library.find(a => a.id === id);
 
 // Build the live-stat fields for a battle-map token from a library template.
 export function tokenStatsFromCharacter(c) {

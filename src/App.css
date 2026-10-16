@@ -466,6 +466,79 @@ body {
 .enc-row-name { flex: 1; font-size: 0.85rem; }
 .enc-count { display: flex; align-items: center; gap: 6px; }
 .enc-total { font-size: 0.75rem; color: var(--text-muted); text-align: right; }
+.enc-local { margin-left: 8px; }
+
+/* ── Data: export / import ── */
+
+.data-tabs { display: flex; gap: 4px; margin-bottom: 14px; }
+.modal h3 {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 18px 0 8px;
+}
+.data-hint  { font-size: 0.8rem; color: var(--text-sub); line-height: 1.45; margin-bottom: 12px; }
+.data-error { font-size: 0.8rem; color: #f87171; margin: -6px 0 12px; }
+.data-ok    { font-size: 0.8rem; color: #4ade80; margin: -6px 0 12px; }
+
+.pick-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+.pick-group summary { cursor: pointer; font-size: 0.85rem; }
+.pick-group[open] summary { margin-bottom: 8px; }
+.pick-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.modal .pick-tools .lib-search { flex: 1; width: auto; margin: 0; padding: 6px 10px; }
+.pick-list { max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; }
+.pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.modal .pick-item input { width: auto; margin: 0; padding: 0; }
+.pick-name { flex: 1; }
+.pick-detail { font-size: 0.7rem; color: var(--text-muted); white-space: nowrap; }
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-sub);
+  font-size: 0.75rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-btn:hover { color: var(--text); }
+
+.conflict-compare { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.conflict-compare > div {
+  font-size: 0.8rem;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+.conflict-compare span {
+  display: block;
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.conflict-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+}
 
 /* ── Battle map side panel ── */
 
