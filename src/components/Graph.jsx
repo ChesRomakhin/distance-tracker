@@ -173,9 +173,12 @@ export default function Graph({
       x0 = Math.min(x0, toPx(bgRect.x)); x1 = Math.max(x1, toPx(bgRect.x + bgRect.w));
       y0 = Math.min(y0, toPx(bgRect.y)); y1 = Math.max(y1, toPx(bgRect.y + bgRect.h));
     }
+    // Measured here, not from `dims`: right after mount `dims` may still be the default.
+    const { width, height } = containerRef.current?.getBoundingClientRect() ?? dims;
     const pad = 70;
-    const z = clampZoom(Math.min(2, (dims.width - 2 * pad) / (x1 - x0), (dims.height - 2 * pad) / (y1 - y0)));
-    centerOn((x0 + x1) / 2, (y0 + y1) / 2, z);
+    const z = clampZoom(Math.min(2, (width - 2 * pad) / (x1 - x0), (height - 2 * pad) / (y1 - y0)));
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    setViewport({ zoom: z, panX: cx - width / (2 * z), panY: cy - height / (2 * z) });
   };
 
   // Latest values for the window-level handlers below.
@@ -213,8 +216,12 @@ export default function Graph({
   // ── New scene: frame it once its background has loaded (or failed) ─────
   useEffect(() => {
     if (fitKey == null || lastFitRef.current === fitKey || img.status === 'loading') return;
-    lastFitRef.current = fitKey;
-    const id = requestAnimationFrame(() => live.current.fitAll());
+    // Marked as done only once the frame runs — a cancelled frame (StrictMode's
+    // double effect, a fast re-render) must not swallow the fit.
+    const id = requestAnimationFrame(() => {
+      lastFitRef.current = fitKey;
+      live.current.fitAll();
+    });
     return () => cancelAnimationFrame(id);
   }, [fitKey, img.status]);
 
@@ -657,7 +664,9 @@ export default function Graph({
         <div className="map-notices">
           {img.status === 'error' && (
             <div className="map-notice map-notice-warn" role="alert">
-              The map background didn't load: <span className="map-notice-url">{bg.url}</span>. The map works without it.
+              <span>
+                The map background didn't load: <span className="map-notice-url">{bg.url}</span>. The map works without it.
+              </span>
             </div>
           )}
           {spawnMode && (

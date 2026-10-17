@@ -37,7 +37,12 @@ export default function Dialog({ title, onClose, wide, className = '', children 
     return () => {
       document.removeEventListener('keydown', onKey, true);
       stack.splice(stack.indexOf(box), 1);
-      prevFocus?.focus?.();
+      // Deferred: a dialog closed by Enter would otherwise hand focus back to the
+      // button that opened it while the key is still going, and "click" it again.
+      setTimeout(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body) prevFocus?.focus?.();
+      }, 0);
     };
   }, []);
 

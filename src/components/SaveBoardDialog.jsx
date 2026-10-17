@@ -36,7 +36,7 @@ export default function SaveBoardDialog({ state, map, onSave, onClose }) {
       </p>
       {skipped > 0 && (
         <p className="data-error">
-          {plural(skipped, 'custom NPC token is', 'custom NPC tokens are')} not saved — they have no stat block.
+          Not saved: {plural(skipped, 'custom NPC token')} — custom tokens have no stat block.
         </p>
       )}
 

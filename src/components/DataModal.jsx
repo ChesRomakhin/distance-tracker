@@ -22,7 +22,8 @@ function summaryText(s) {
     s.skipped   && `skipped ${s.skipped}`,
     s.unchanged && `${s.unchanged} already up to date`,
   ].filter(Boolean);
-  return parts.length ? `${parts.join(' · ')}.` : 'Nothing to import.';
+  const text = parts.join(' · ');
+  return parts.length ? `${text[0].toUpperCase()}${text.slice(1)}.` : 'Nothing to import.';
 }
 
 // One collapsible checkbox list.
