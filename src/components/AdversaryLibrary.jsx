@@ -42,7 +42,7 @@ export default function AdversaryLibrary({ adversaries, encounters, onAdd, onEdi
   };
 
   const askRemove = a => {
-    const usedIn = encounters.filter(e => e.entries.some(en => en.adversaryId === a.id)).map(e => `“${e.name}”`);
+    const usedIn = encounters.filter(e => e.placements.some(p => p.ref.lib === a.id)).map(e => `“${e.name}”`);
     confirm({
       title: `Delete ${a.name}?`,
       message: usedIn.length

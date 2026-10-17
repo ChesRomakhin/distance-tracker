@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import StatStepper from './StatStepper';
 import { tierSummary } from './EncounterBuilder';
+import { canDeploy } from '../scene';
 import {
   TYPE_FILL, DIST_COLOR, DIST_SHORT, SIZE_PRESETS, rangeM, bandOf, tokenLabel,
 } from '../constants';
@@ -275,7 +276,7 @@ function AddUnits({ characters, adversaries, encounters, tokens, onAddCharacter,
           {tab === 'encounters'
             ? shown.map(enc => (
                 <button
-                  key={enc.id} className="sp-add-row" disabled={!enc.entries.length}
+                  key={enc.id} className="sp-add-row" disabled={!canDeploy(enc)}
                   onClick={() => onDeployEncounter(enc)} title={`Deploy ${enc.name}`}
                 >
                   <span className="sp-add-name">{enc.name}</span>

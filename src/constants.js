@@ -154,16 +154,70 @@ export function makeCharacter(over = {}) {
   };
 }
 
-// entries: [{ adversaryId, count }]. `adversaries` holds encounter-local copies
-// (from an imported file) that are not in the library.
-export function makeEncounter(over = {}) {
-  return { id: null, name: '', entries: [], adversaries: [], ...over };
+// ── Maps ────────────────────────────────────────────────────────────────────
+
+// A common VTT export: 70 px per 5 ft square.
+export const DEFAULT_PX_PER_M = 70 / TOKEN_DIAMETER_M;
+
+// background: { url, pxPerMeter, offset: { x, y } } — offset is where the image's
+// top-left corner sits, in metres. walls / rooms / props are filled in phase 4.
+export function makeMap(over = {}) {
+  return { id: null, name: '', background: null, walls: [], rooms: [], props: [], ...over };
 }
 
-// Entries look in the encounter's own adversaries first, then in the library.
-// Ids come from one global counter, so the two never collide.
-export const findEncounterAdversary = (enc, id, library) =>
-  enc.adversaries?.find(a => a.id === id) ?? library.find(a => a.id === id);
+// The background's rectangle in metres, once the image size is known.
+export function backgroundRect(bg, img) {
+  if (!bg || img?.status !== 'ok') return null;
+  return { x: bg.offset.x, y: bg.offset.y, w: img.w / bg.pxPerMeter, h: img.h / bg.pxPerMeter };
+}
+
+// ── Encounters ──────────────────────────────────────────────────────────────
+
+// placements: [{ ref: { lib: id } | { local: id }, label, x, y, size }] — one per unit.
+//   label null → named at deploy ("Goblin 2"); x / y null → placed at deploy;
+//   size null → the adversary's size.
+// `adversaries` holds encounter-local copies (from an imported file) that are not
+// in the library. spawnPoints: [{ x, y }] — where PCs stand, in order.
+export function makeEncounter(over = {}) {
+  return { id: null, name: '', mapId: null, adversaries: [], placements: [], spawnPoints: [], ...over };
+}
+
+// Ids come from one global counter, so local and library ids never collide.
+export const refId = ref => ref.local ?? ref.lib;
+
+export const placementAdversary = (enc, p, library) =>
+  p.ref.local != null
+    ? enc.adversaries?.find(a => a.id === p.ref.local)
+    : library.find(a => a.id === p.ref.lib);
+
+// Placements grouped by adversary: [{ ref, count, placed }] in first-seen order.
+export function encounterGroups(enc) {
+  const groups = new Map();
+  enc.placements.forEach(p => {
+    const key = refId(p.ref);
+    const g = groups.get(key) ?? { ref: p.ref, count: 0, placed: 0 };
+    g.count++;
+    if (p.x != null) g.placed++;
+    groups.set(key, g);
+  });
+  return [...groups.values()];
+}
+
+// Phase-2 roster encounters ({ entries: [{ adversaryId, count }] }) → placements
+// without positions. Encounters that already have placements pass through.
+export function migrateEncounter(enc) {
+  if (Array.isArray(enc.placements)) return enc;
+  const { entries, ...rest } = enc;
+  const locals = new Set((enc.adversaries ?? []).map(a => a?.id));
+  const placements = (Array.isArray(entries) ? entries : [])
+    .filter(en => en && en.adversaryId != null)
+    .flatMap(en => {
+      const ref = locals.has(en.adversaryId) ? { local: en.adversaryId } : { lib: en.adversaryId };
+      const count = Math.max(1, Math.floor(Number(en.count)) || 1);
+      return Array.from({ length: count }, () => ({ ref, label: null, x: null, y: null, size: null }));
+    });
+  return { ...rest, mapId: enc.mapId ?? null, spawnPoints: enc.spawnPoints ?? [], placements };
+}
 
 // Build the live-stat fields for a battle-map token from a library template.
 export function tokenStatsFromCharacter(c) {

@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import {
   DISTANCES, DIST_COLOR, DIST_LABEL, DIST_METERS, DIST_SHORT,
-  TYPE_FILL, TYPE_RING, PX_PER_M, toPx, tokenRadiusM, ringRadiusM, rangeM, bandOf, tokenLabel,
+  TYPE_FILL, TYPE_RING, PX_PER_M, TOKEN_DIAMETER_M, toPx, tokenRadiusM, ringRadiusM, rangeM, bandOf, tokenLabel,
+  backgroundRect,
 } from '../constants';
+import useImage from '../useImage';
 
 const ZOOM_MIN  = 0.12;
 const ZOOM_MAX  = 10;
@@ -56,10 +58,19 @@ export default function Graph({
   onConfirmPosition,   // (id) => void — snap rings to token's current position
   onMoveStart,         // (id) => void — a drag is about to move the token (undo snapshot)
   onMoveToken,
+  map,                 // scene map (background) or null
+  fitKey,              // changes → frame the scene (new map, deployed encounter)
+  spawnPoints = [],    // GM: PC spawn points, in order
+  spawnMode,           // GM: clicks on the canvas add spawn points
+  onAddSpawn,          // (x, y) => void
+  onRemoveSpawn,       // (index) => void
+  onMoveSpawn,         // (index, x, y) => void
+  onSpawnModeEnd,
   role,
   viewRef,             // ref the map writes its viewport/centre into (kept across remounts)
 }) {
   const containerRef = useRef(null);
+  const lastFitRef   = useRef(viewRef?.current?.fitKey);
 
   const [dims,     setDims]     = useState({ width: 800, height: 600 });
   const [viewport, setViewport] = useState(() => viewRef?.current?.viewport ?? { zoom: 1, panX: 0, panY: 0 });
@@ -68,6 +79,9 @@ export default function Graph({
   const [legendOpen, toggleLegend] = useStoredToggle('dh-legend-open', window.innerWidth > 700);
 
   const isGM = role === 'gm';
+  const bg     = map?.background ?? null;
+  const img    = useImage(bg?.url);
+  const bgRect = backgroundRect(bg, img);   // metres
   const focusedToken = tokens.find(t => t.id === focusedId) ?? null;
   const { zoom, panX, panY } = viewport;
   const viewW = dims.width / zoom, viewH = dims.height / zoom;
@@ -93,6 +107,7 @@ export default function Graph({
     if (!viewRef) return;
     viewRef.current = {
       viewport,
+      fitKey: lastFitRef.current,
       center: { x: (panX + viewW / 2) / PX_PER_M, y: (panY + viewH / 2) / PX_PER_M },
     };
   });
@@ -145,15 +160,19 @@ export default function Graph({
   const centerOn = (px, py, z = zoom) =>
     setViewport({ zoom: z, panX: px - dims.width / (2 * z), panY: py - dims.height / (2 * z) });
 
-  // Frame every token on the board.
+  // Frame every token on the board, and the map background.
   const fitAll = () => {
-    if (!tokens.length) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
+    if (!tokens.length && !bgRect) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     tokens.forEach(t => {
       const r = toPx(tokenRadiusM(t));
       x0 = Math.min(x0, toPx(t.x) - r); x1 = Math.max(x1, toPx(t.x) + r);
       y0 = Math.min(y0, toPx(t.y) - r); y1 = Math.max(y1, toPx(t.y) + r);
     });
+    if (bgRect) {
+      x0 = Math.min(x0, toPx(bgRect.x)); x1 = Math.max(x1, toPx(bgRect.x + bgRect.w));
+      y0 = Math.min(y0, toPx(bgRect.y)); y1 = Math.max(y1, toPx(bgRect.y + bgRect.h));
+    }
     const pad = 70;
     const z = clampZoom(Math.min(2, (dims.width - 2 * pad) / (x1 - x0), (dims.height - 2 * pad) / (y1 - y0)));
     centerOn((x0 + x1) / 2, (y0 + y1) / 2, z);
@@ -161,7 +180,10 @@ export default function Graph({
 
   // Latest values for the window-level handlers below.
   const live = useRef({});
-  live.current = { viewport, focusedId, isGM, onFocusChange, onConfirmPosition, onMoveToken, onMoveStart, zoomBy, fitAll };
+  live.current = {
+    viewport, focusedId, isGM, onFocusChange, onConfirmPosition, onMoveToken, onMoveStart, zoomBy, fitAll,
+    spawnMode, onAddSpawn, onRemoveSpawn, onMoveSpawn,
+  };
 
   // ── Keyboard: zoom / fit ───────────────────────────────────────────────
   useEffect(() => {
@@ -188,6 +210,14 @@ export default function Graph({
     return () => cancelAnimationFrame(id);
   }, [isGM, tokens.length]);
 
+  // ── New scene: frame it once its background has loaded (or failed) ─────
+  useEffect(() => {
+    if (fitKey == null || lastFitRef.current === fitKey || img.status === 'loading') return;
+    lastFitRef.current = fitKey;
+    const id = requestAnimationFrame(() => live.current.fitAll());
+    return () => cancelAnimationFrame(id);
+  }, [fitKey, img.status]);
+
   // ── Player: keep the GM's selection in view ────────────────────────────
   useEffect(() => {
     if (isGM || !ringAnchor) return;
@@ -203,7 +233,17 @@ export default function Graph({
   const pointersRef = useRef(new Map());   // pointerId → { x, y }
   const gestureRef  = useRef(null);
 
-  function beginPointer(e, tok) {
+  // Screen point → world metres.
+  const worldAt = (clientX, clientY) => {
+    const rect = containerRef.current.getBoundingClientRect();
+    const v = live.current.viewport;
+    return {
+      x: (v.panX + (clientX - rect.left) / v.zoom) / PX_PER_M,
+      y: (v.panY + (clientY - rect.top) / v.zoom) / PX_PER_M,
+    };
+  };
+
+  function beginPointer(e, tok, spawnIndex) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const pts = pointersRef.current;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -222,8 +262,14 @@ export default function Graph({
     }
     if (pts.size > 2) return;
 
+    const k = v.zoom * PX_PER_M;
+    if (spawnIndex != null) {
+      const p = spawnPoints[spawnIndex];
+      gestureRef.current = { kind: 'spawn', index: spawnIndex, x0: e.clientX, y0: e.clientY, tx0: p.x, ty0: p.y, k, moved: false };
+      return;
+    }
     gestureRef.current = tok && live.current.isGM
-      ? { kind: 'drag', id: tok.id, x0: e.clientX, y0: e.clientY, tx0: tok.x, ty0: tok.y, k: v.zoom * PX_PER_M, moved: false }
+      ? { kind: 'drag', id: tok.id, x0: e.clientX, y0: e.clientY, tx0: tok.x, ty0: tok.y, k, moved: false }
       : { kind: 'pan', x0: e.clientX, y0: e.clientY, panX0: v.panX, panY0: v.panY, z: v.zoom, moved: false };
   }
 
@@ -249,10 +295,11 @@ export default function Graph({
       if (!g.moved && dx * dx + dy * dy > slop * slop) {
         g.moved = true;
         if (g.kind === 'pan')  setPanning(true);
-        if (g.kind === 'drag') live.current.onMoveStart?.(g.id);
+        if (g.kind === 'drag' || g.kind === 'spawn') live.current.onMoveStart?.(g.id);
       }
       if (!g.moved) return;
       if (g.kind === 'drag') live.current.onMoveToken(g.id, g.tx0 + dx / g.k, g.ty0 + dy / g.k);
+      else if (g.kind === 'spawn') live.current.onMoveSpawn(g.index, g.tx0 + dx / g.k, g.ty0 + dy / g.k);
       else setViewport(v => ({ ...v, panX: g.panX0 - dx / g.z, panY: g.panY0 - dy / g.z }));
     };
 
@@ -278,6 +325,11 @@ export default function Graph({
         // Tap on the focused token confirms its new position; on another token, selects it.
         if (L.focusedId === g.id) L.onConfirmPosition(g.id);
         else L.onFocusChange(g.id);
+      } else if (g.kind === 'spawn') {
+        L.onRemoveSpawn(g.index);
+      } else if (L.isGM && L.spawnMode) {
+        const p = worldAt(e.clientX, e.clientY);
+        L.onAddSpawn(p.x, p.y);
       } else if (L.isGM) {
         L.onFocusChange(null);
       }
@@ -301,9 +353,9 @@ export default function Graph({
     <div
       ref={containerRef}
       className="graph-container"
-      style={{ cursor: panning ? 'grabbing' : 'default' }}
+      style={{ cursor: panning ? 'grabbing' : spawnMode ? 'crosshair' : 'default' }}
     >
-      {tokens.length === 0 && (
+      {tokens.length === 0 && !bgRect && !spawnMode && (
         <div className="empty-msg">
           <span className="empty-icon">⚔</span>
           {isGM ? (
@@ -331,7 +383,46 @@ export default function Graph({
             />
           </pattern>
         </defs>
-        {zoom >= 0.3 && <rect x={panX} y={panY} width={viewW} height={viewH} fill="url(#sq-grid)" style={{ pointerEvents: 'none' }} />}
+        {bgRect && (
+          <image
+            href={bg.url}
+            x={toPx(bgRect.x)} y={toPx(bgRect.y)} width={toPx(bgRect.w)} height={toPx(bgRect.h)}
+            preserveAspectRatio="none"
+            style={{ pointerEvents: 'none' }}
+          />
+        )}
+        {/* The map image usually has its own grid — the board grid would clash with it. */}
+        {!bgRect && zoom >= 0.3 && <rect x={panX} y={panY} width={viewW} height={viewH} fill="url(#sq-grid)" style={{ pointerEvents: 'none' }} />}
+
+        {/* ── PC spawn points (GM only) ── */}
+        {spawnPoints.map((p, i) => {
+          const x = toPx(p.x), y = toPx(p.y), r = toPx(TOKEN_DIAMETER_M / 2);
+          return (
+            <g
+              key={i}
+              style={{ pointerEvents: spawnMode ? 'auto' : 'none', cursor: spawnMode ? 'grab' : 'default' }}
+              onPointerDown={spawnMode ? e => { e.stopPropagation(); beginPointer(e, null, i); } : undefined}
+            >
+              <title>{`Spawn point ${i + 1}${spawnMode ? ' — click to remove, drag to move' : ''}`}</title>
+              <circle
+                cx={x} cy={y} r={r}
+                fill="#c9a84c" fillOpacity={spawnMode ? 0.22 : 0.1}
+                stroke="#c9a84c" strokeOpacity={spawnMode ? 0.95 : 0.5}
+                strokeWidth={1.5} strokeDasharray="4 3"
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={x} y={y}
+                textAnchor="middle" dominantBaseline="central"
+                fontSize={Math.max(r * 0.7, 9 * ui)} fontWeight={800}
+                fill="#c9a84c" fillOpacity={spawnMode ? 1 : 0.6}
+                {...textProps}
+              >
+                {i + 1}
+              </text>
+            </g>
+          );
+        })}
 
         {/* ── Distance rings — pinned at ringAnchor ── */}
         {ringAnchor && focusedToken && (
@@ -561,12 +652,32 @@ export default function Graph({
         </g>
       </svg>
 
+      {/* ── Notices: spawn mode, broken background ── */}
+      {isGM && (spawnMode || img.status === 'error') && (
+        <div className="map-notices">
+          {img.status === 'error' && (
+            <div className="map-notice map-notice-warn" role="alert">
+              The map background didn't load: <span className="map-notice-url">{bg.url}</span>. The map works without it.
+            </div>
+          )}
+          {spawnMode && (
+            <div className="map-notice">
+              <span>
+                <b>Spawn points</b> — click the map to add · click a point to remove · drag to move.
+                PCs take them in order.
+              </span>
+              <button className="btn btn-pc btn-sm" onClick={onSpawnModeEnd}>Done</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Zoom controls ── */}
       <div className="zoom-controls panel">
         <button className="zoom-btn" onClick={() => zoomBy(ZOOM_STEP)} title="Zoom in (+)" aria-label="Zoom in">+</button>
         <span className="zoom-level" aria-live="polite">{Math.round(zoom * 100)}%</span>
         <button className="zoom-btn" onClick={() => zoomBy(1 / ZOOM_STEP)} title="Zoom out (−)" aria-label="Zoom out">−</button>
-        <button className="zoom-btn zoom-text" onClick={fitAll} title="Show all tokens (F)" aria-label="Show all tokens">Fit</button>
+        <button className="zoom-btn zoom-text" onClick={fitAll} title="Show the whole board (F)" aria-label="Show the whole board">Fit</button>
         <button
           className="zoom-btn zoom-reset"
           onClick={() => setViewport({ zoom: 1, panX: 0, panY: 0 })}

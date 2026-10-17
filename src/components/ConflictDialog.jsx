@@ -2,8 +2,14 @@ import { useState } from 'react';
 import Dialog from './Dialog';
 import { normName, uniqueName } from '../transfer';
 
-// Per-kind wording. Phases 3–4 add maps and prop templates here.
+// Per-kind wording. Phase 4 adds prop templates here.
 const KIND = {
+  map: {
+    library: 'maps',
+    line: m => (m.background
+      ? `${Math.round(m.background.pxPerMeter * 1.5)} px per square · offset ${m.background.offset.x}, ${m.background.offset.y} m · ${m.background.url}`
+      : 'No background'),
+  },
   adversary: {
     library: 'adversary library',
     line: a => `Tier ${a.tier} ${a.type} · HP ${a.hpMax} · Stress ${a.stressMax} · Diff ${a.difficulty}`,

@@ -3,6 +3,7 @@
 
 import { SRD_UPDATES } from './srdUpdates';
 import { canon } from './transfer';
+import { migrateEncounter } from './constants';
 
 const KEY = 'daggerheart-tracker-v1';
 
@@ -41,6 +42,9 @@ export function loadState(fallback) {
       merged.tokens = [];
       merged.schemaVersion = fallback.schemaVersion;
     }
+
+    // Roster encounters (entries) → placements. Idempotent, so no version bump.
+    merged.encounters = (merged.encounters || []).map(migrateEncounter);
 
     // Seed (or top up) the SRD adversary library when the stored seed version is
     // behind. SRD entries are updated field by field, but only where they still

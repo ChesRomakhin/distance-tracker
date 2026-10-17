@@ -6,12 +6,17 @@ import CharacterLibrary from './components/CharacterLibrary';
 import EncounterBuilder from './components/EncounterBuilder';
 import BattleSidePanel from './components/BattleSidePanel';
 import DataModal from './components/DataModal';
+import MapLibrary from './components/MapLibrary';
+import DeployDialog from './components/DeployDialog';
+import SaveBoardDialog from './components/SaveBoardDialog';
 import { useConfirm, useToast } from './components/Feedback';
 import {
-  tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter, findEncounterAdversary,
-  spawnPositions, PX_PER_M,
+  tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter,
+  spawnPositions, backgroundRect, PX_PER_M,
 } from './constants';
-import { applyImport, buildSelection, downloadJson, encounterFileName } from './transfer';
+import { applyImport, buildSelection, downloadJson, fileNameFor } from './transfer';
+import { adversarySpecs, findAnyAdversary, isScene, planDeploy, sceneCenter } from './scene';
+import { cachedImage } from './useImage';
 import { loadState, saveState, storedSeedVersion } from './storage';
 import './App.css';
 
@@ -44,25 +49,40 @@ const HISTORY_LIMIT = 50;
 
 const initial = {
   tokens: [],
+  sceneMapId: null,  // map on the board (the map itself is reused across encounters)
+  spawnPoints: [],   // PC spawn points marked on the board, in order
   adversaries: SEED_ADVERSARIES,
   characters: [],
   encounters: [],
+  maps: [],
   nextId: SEED_ADVERSARIES.length + 1,
   seedVersion: SEED_VERSION,
   schemaVersion: SCHEMA_VERSION,
-  boardPast: [],     // token snapshots for undo (not persisted)
+  boardPast: [],     // board snapshots for undo (not persisted)
   boardFuture: [],   // … and redo
 };
 
-// Board actions that get an undo step. MOVE_TOKEN fires on every drag frame,
-// so drags record one step up front via BOARD_SNAPSHOT instead.
-const BOARD_ACTIONS = new Set(['ADD_TOKENS', 'ADD_PC', 'REMOVE_TOKEN', 'UPDATE_TOKEN_STATS', 'CLEAR', 'BOARD_SNAPSHOT']);
+// Board actions that get an undo step. MOVE_TOKEN / MOVE_SPAWN fire on every
+// drag frame, so drags record one step up front via BOARD_SNAPSHOT instead.
+const BOARD_ACTIONS = new Set([
+  'ADD_TOKENS', 'ADD_PC', 'REMOVE_TOKEN', 'UPDATE_TOKEN_STATS', 'CLEAR', 'BOARD_SNAPSHOT',
+  'SET_SCENE_MAP', 'ADD_SPAWN', 'REMOVE_SPAWN', 'DEPLOY_SCENE',
+]);
+
+const boardOf = s => ({ tokens: s.tokens, sceneMapId: s.sceneMapId, spawnPoints: s.spawnPoints });
+
+const newToken = (t, id) => ({
+  id, name: t.name, type: t.tokenType,
+  x: t.x, y: t.y,
+  refKind: 'custom', size: 1,
+  ...(t.stats || {}),
+});
 
 function reducer(state, action) {
   if (BOARD_ACTIONS.has(action.type)) {
     state = {
       ...state,
-      boardPast: [...state.boardPast.slice(-(HISTORY_LIMIT - 1)), state.tokens],
+      boardPast: [...state.boardPast.slice(-(HISTORY_LIMIT - 1)), boardOf(state)],
       boardFuture: [],
     };
   }
@@ -74,29 +94,48 @@ function reducer(state, action) {
       if (!state.boardPast.length) return state;
       return {
         ...state,
-        tokens: state.boardPast[state.boardPast.length - 1],
+        ...state.boardPast[state.boardPast.length - 1],
         boardPast: state.boardPast.slice(0, -1),
-        boardFuture: [state.tokens, ...state.boardFuture],
+        boardFuture: [boardOf(state), ...state.boardFuture],
       };
     }
     case 'REDO': {
       if (!state.boardFuture.length) return state;
       return {
         ...state,
-        tokens: state.boardFuture[0],
-        boardPast: [...state.boardPast, state.tokens],
+        ...state.boardFuture[0],
+        boardPast: [...state.boardPast, boardOf(state)],
         boardFuture: state.boardFuture.slice(1),
       };
     }
     case 'ADD_TOKENS': {
       let id = state.nextId;
-      const added = action.tokens.map(t => ({
-        id: id++, name: t.name, type: t.tokenType,
-        x: t.x, y: t.y,
-        refKind: 'custom', size: 1,
-        ...(t.stats || {}),
-      }));
+      const added = action.tokens.map(t => newToken(t, id++));
       return { ...state, tokens: [...state.tokens, ...added], nextId: id };
+    }
+
+    // ── Scene ──
+    case 'SET_SCENE_MAP':
+      return { ...state, sceneMapId: action.mapId };
+    case 'ADD_SPAWN':
+      return { ...state, spawnPoints: [...state.spawnPoints, { x: action.x, y: action.y }] };
+    case 'REMOVE_SPAWN':
+      return { ...state, spawnPoints: state.spawnPoints.filter((_, i) => i !== action.index) };
+    case 'MOVE_SPAWN':
+      return {
+        ...state,
+        spawnPoints: state.spawnPoints.map((p, i) => (i === action.index ? { x: action.x, y: action.y } : p)),
+      };
+    case 'DEPLOY_SCENE': {
+      let id = state.nextId;
+      const added = action.add.map(t => newToken(t, id++));
+      return {
+        ...state,
+        sceneMapId: action.mapId,
+        spawnPoints: action.spawnPoints,
+        tokens: [...action.keep, ...added],
+        nextId: id,
+      };
     }
     case 'ADD_PC': {
       // Adding a PC from the battle map also registers it in the Characters tab.
@@ -131,7 +170,7 @@ function reducer(state, action) {
         ),
       };
     case 'CLEAR':
-      return { ...state, tokens: [] };   // board only — libraries persist
+      return { ...state, tokens: [], spawnPoints: [] };   // board only — the map and libraries stay
     case 'SET_TOKENS':
       return { ...state, tokens: action.tokens };
 
@@ -153,7 +192,7 @@ function reducer(state, action) {
         adversaries: state.adversaries.filter(a => a.id !== action.id),
         encounters: state.encounters.map(e => ({
           ...e,
-          entries: e.entries.filter(en => en.adversaryId !== action.id),
+          placements: e.placements.filter(p => p.ref.lib !== action.id),
         })),
       };
 
@@ -186,6 +225,40 @@ function reducer(state, action) {
       };
     case 'REMOVE_ENCOUNTER':
       return { ...state, encounters: state.encounters.filter(e => e.id !== action.id) };
+    case 'SAVE_BOARD_TO_ENCOUNTER': {
+      // Local adversaries arrive with temporary negative ids — give them real ones.
+      let id = state.nextId;
+      const enc = action.encounter;
+      const ids = new Map();
+      const adversaries = enc.adversaries.map(a => {
+        ids.set(a.id, id);
+        return { ...a, id: id++ };
+      });
+      const placements = enc.placements.map(p =>
+        p.ref.local != null ? { ...p, ref: { local: ids.get(p.ref.local) } } : p);
+      const entry = { ...enc, adversaries, placements };
+      if (enc.id == null) {
+        return { ...state, encounters: [...state.encounters, { ...entry, id: id++ }], nextId: id };
+      }
+      return { ...state, encounters: state.encounters.map(e => (e.id === enc.id ? entry : e)), nextId: id };
+    }
+
+    // ── Maps ──
+    case 'ADD_MAP':
+      return {
+        ...state,
+        maps: [...state.maps, { ...action.entry, id: state.nextId }],
+        nextId: state.nextId + 1,
+      };
+    case 'EDIT_MAP':
+      return { ...state, maps: state.maps.map(m => (m.id === action.entry.id ? action.entry : m)) };
+    case 'REMOVE_MAP':
+      return {
+        ...state,
+        maps: state.maps.filter(m => m.id !== action.id),
+        encounters: state.encounters.map(e => (e.mapId === action.id ? { ...e, mapId: null } : e)),
+        sceneMapId: state.sceneMapId === action.id ? null : state.sceneMapId,
+      };
 
     // ── Import (one atomic step) ──
     case 'IMPORT':
@@ -207,9 +280,14 @@ export default function App() {
     initial,
     init => (ROLE === 'gm' ? loadState(init) : init),
   );
-  const [view,       setView]       = useState('map');   // 'map'|'adversaries'|'characters'|'encounters'
+  const [view,       setView]       = useState('map');   // 'map'|'adversaries'|'characters'|'encounters'|'maps'
   const [modal,      setModal]      = useState(null);
   const [dataOpen,   setDataOpen]   = useState(false);
+  const [saveOpen,   setSaveOpen]   = useState(false);   // "Save to encounter" dialog
+  const [deploying,  setDeploying]  = useState(null);    // encounter waiting for the PC dialog
+  const [spawnMode,  setSpawnMode]  = useState(false);   // GM: clicks on the map mark spawn points
+  const [fitKey,     setFitKey]     = useState(0);       // bump → the map frames the new scene
+  const [scene,      setScene]      = useState(null);    // player: the map received from the GM
   const [focusedId,  setFocusedId]  = useState(null);
   const [ringAnchor, setRingAnchor] = useState(null);    // { x, y } — where rings are pinned
   const [panelOpen,  setPanelOpen]  = useState(false);   // side panel drawer on narrow screens
@@ -218,9 +296,11 @@ export default function App() {
   const confirm = useConfirm();
   const toast   = useToast();
 
+  const sceneMap = state.maps.find(m => m.id === state.sceneMapId) ?? null;
+
   // Always-fresh ref for the REQUEST_STATE handler
-  const latestRef = useRef({ tokens: state.tokens, focusedId, ringAnchor });
-  useEffect(() => { latestRef.current = { tokens: state.tokens, focusedId, ringAnchor }; });
+  const latestRef = useRef({ tokens: state.tokens, focusedId, ringAnchor, sceneMap });
+  useEffect(() => { latestRef.current = { tokens: state.tokens, focusedId, ringAnchor, sceneMap }; });
 
   // ── Persistence (GM only) ────────────────────────────────────────────────
   useEffect(() => {
@@ -267,11 +347,19 @@ export default function App() {
     CHANNEL.postMessage({ type: 'STATE_UPDATE', tokens: state.tokens, focusedId, ringAnchor });
   }, [state.tokens, focusedId, ringAnchor]);
 
+  // The whole map goes out only when the scene changes (or the map is edited).
+  useEffect(() => {
+    if (ROLE !== 'gm') return;
+    CHANNEL.postMessage({ type: 'SCENE_UPDATE', map: sceneMap });
+  }, [sceneMap]);
+
   useEffect(() => {
     if (ROLE !== 'gm') return;
     const handler = e => {
       if (e.data.type === 'REQUEST_STATE') {
-        CHANNEL.postMessage({ type: 'STATE_UPDATE', ...latestRef.current });
+        const { sceneMap: map, ...board } = latestRef.current;
+        CHANNEL.postMessage({ type: 'SCENE_UPDATE', map });
+        CHANNEL.postMessage({ type: 'STATE_UPDATE', ...board });
       }
     };
     CHANNEL.addEventListener('message', handler);
@@ -283,11 +371,20 @@ export default function App() {
   useEffect(() => {
     if (ROLE !== 'player') return;
     let lastSeen = 0;
+    let sceneId;   // undefined until the first scene arrives
     const handler = e => {
-      if (e.data.type !== 'STATE_UPDATE' && e.data.type !== 'HEARTBEAT') return;
+      const { type } = e.data;
+      if (type !== 'STATE_UPDATE' && type !== 'SCENE_UPDATE' && type !== 'HEARTBEAT') return;
       lastSeen = Date.now();
       setLink('live');
-      if (e.data.type !== 'STATE_UPDATE') return;
+      if (type === 'SCENE_UPDATE') {
+        setScene(e.data.map);
+        // A different map → frame it; edits to the same map keep the view.
+        if ((e.data.map?.id ?? null) !== sceneId) setFitKey(k => k + 1);
+        sceneId = e.data.map?.id ?? null;
+        return;
+      }
+      if (type !== 'STATE_UPDATE') return;
       dispatch({ type: 'SET_TOKENS', tokens: e.data.tokens });
       setFocusedId(e.data.focusedId);
       setRingAnchor(e.data.ringAnchor);
@@ -330,19 +427,48 @@ export default function App() {
   const handleQuickAddCharacter = c => addTokens([{ name: c.name, tokenType: 'PC',  stats: tokenStatsFromCharacter(c) }]);
   const handleQuickAddAdversary = a => addTokens([{ name: a.name, tokenType: 'NPC', stats: tokenStatsFromAdversary(a) }]);
 
+  const units = n => `${n} unit${n === 1 ? '' : 's'}`;
+
+  // A plain roster joins the board; a scene (map / positions) goes through the PC dialog.
   const handleDeployEncounter = enc => {
-    const specs = [];
-    enc.entries.forEach(({ adversaryId, count }) => {
-      const adv = findEncounterAdversary(enc, adversaryId, state.adversaries);
-      if (!adv) return;
-      for (let i = 0; i < count; i++) {
-        specs.push({ name: count > 1 ? `${adv.name} ${i + 1}` : adv.name, tokenType: 'NPC', stats: tokenStatsFromAdversary(adv) });
-      }
-    });
+    if (isScene(enc)) { setDeploying(enc); return; }
+    const specs = adversarySpecs(enc, state.adversaries);
     if (!specs.length) return;
     addTokens(specs);
     setView('map');
-    toast(`Deployed “${enc.name}” — ${specs.length} unit${specs.length === 1 ? '' : 's'}.`, undoAction);
+    toast(`Deployed “${enc.name}” — ${units(specs.length)}.`, undoAction);
+  };
+
+  const handleDeployScene = (enc, pcIds) => {
+    const map = state.maps.find(m => m.id === enc.mapId);
+    const bg  = map?.background;
+    const center = sceneCenter(enc, backgroundRect(bg, cachedImage(bg?.url)), spawnCenter());
+    const plan = planDeploy(enc, {
+      library: state.adversaries, characters: state.characters, pcIds, tokens: state.tokens, center,
+    });
+    dispatch({ type: 'DEPLOY_SCENE', ...plan, mapId: map ? map.id : null });
+    setDeploying(null);
+    setSpawnMode(false);
+    setView('map');
+    setFitKey(k => k + 1);
+    toast(`Deployed “${enc.name}” — ${units(plan.keep.length + plan.add.length)}.`, undoAction);
+  };
+
+  const handleSaveBoard = (encounter, isNew) => {
+    dispatch({ type: 'SAVE_BOARD_TO_ENCOUNTER', encounter });
+    setSaveOpen(false);
+    toast(isNew ? `Saved the board as “${encounter.name}”.` : `Updated “${encounter.name}” from the board.`);
+  };
+
+  const handleSetSceneMap = mapId => {
+    dispatch({ type: 'SET_SCENE_MAP', mapId });
+    setFitKey(k => k + 1);
+  };
+
+  const handleOpenMap = map => {
+    handleSetSceneMap(map.id);
+    setView('map');
+    toast(`“${map.name}” is on the board.`, undoAction);
   };
 
   const handleRemoveToken = id => {
@@ -352,11 +478,13 @@ export default function App() {
     if (tok) toast(`Removed ${tok.name}.`, undoAction);
   };
 
+  const boardEmpty = !state.tokens.length && !state.spawnPoints.length;
+
   const handleClear = () => {
-    if (!state.tokens.length) return;
+    if (boardEmpty) return;
     confirm({
       title: 'Clear the board?',
-      message: `Removes all ${state.tokens.length} tokens with their HP and Stress. Your libraries are kept, and you can undo this.`,
+      message: `Removes all ${state.tokens.length} tokens with their HP and Stress, and the spawn points. The map and your libraries are kept, and you can undo this.`,
       confirmLabel: 'Clear board',
       onConfirm: () => {
         dispatch({ type: 'CLEAR' });
@@ -371,12 +499,11 @@ export default function App() {
     dispatch({ type: 'UPDATE_TOKEN_STATS', id, patch });
 
   const handleExportEncounter = enc =>
-    downloadJson(buildSelection(state, { encounterIds: [enc.id] }), encounterFileName(enc));
+    downloadJson(buildSelection(state, { encounterIds: [enc.id] }), fileNameFor('encounter', enc.name));
+  const handleExportMap = map =>
+    downloadJson(buildSelection(state, { mapIds: [map.id] }), fileNameFor('map', map.name));
 
-  // Library first, then adversaries that live inside encounters (imported ones).
-  const findAdversary = id =>
-    state.adversaries.find(a => a.id === id) ??
-    state.encounters.flatMap(e => e.adversaries ?? []).find(a => a.id === id);
+  const findAdversary = id => findAnyAdversary(state, id);
 
   // ── GM keyboard shortcuts ──────────────────────────────────────────────────
   const keyRef = useRef(null);
@@ -389,7 +516,8 @@ export default function App() {
     if (mod && key === 'y') { redo(); e.preventDefault(); return; }
     if (mod || e.altKey || view !== 'map') return;
 
-    if (e.key === 'Escape' && focusedId != null) handleFocusChange(null);
+    if (e.key === 'Escape' && spawnMode) setSpawnMode(false);
+    else if (e.key === 'Escape' && focusedId != null) handleFocusChange(null);
     else if ((e.key === 'Delete' || e.key === 'Backspace') && focusedToken) handleRemoveToken(focusedToken.id);
     else if (e.key === 'Enter' && focusedToken) handleConfirmPosition(focusedToken.id);
     else if (e.key.startsWith('Arrow') && focusedToken) {
@@ -418,6 +546,7 @@ export default function App() {
     ['adversaries', 'Adversaries'],
     ['characters',  'Characters'],
     ['encounters',  'Encounters'],
+    ['maps',        'Maps'],
   ];
 
   const LINK_TEXT = {
@@ -449,12 +578,39 @@ export default function App() {
             <div className="toolbar">
               {view === 'map' && (
                 <>
+                  <select
+                    className="lib-select toolbar-map"
+                    value={state.sceneMapId ?? ''}
+                    onChange={e => handleSetSceneMap(e.target.value === '' ? null : Number(e.target.value))}
+                    aria-label="Map on the board"
+                    title="Map on the board"
+                  >
+                    <option value="">No map</option>
+                    {state.maps.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  </select>
+                  <button
+                    className={`btn btn-clr ${spawnMode ? 'btn-on' : ''}`}
+                    onClick={() => setSpawnMode(on => !on)}
+                    aria-pressed={spawnMode}
+                    title="Mark where PCs appear when this board is deployed as an encounter"
+                  >
+                    Spawn points{state.spawnPoints.length > 0 && ` (${state.spawnPoints.length})`}
+                  </button>
+                  <button
+                    className="btn btn-clr"
+                    onClick={() => setSaveOpen(true)}
+                    disabled={boardEmpty && state.sceneMapId == null}
+                    title="Save the map, adversary positions and spawn points as an encounter"
+                  >
+                    Save to encounter
+                  </button>
+                  <span className="toolbar-sep" />
                   <button className="btn btn-pc"  onClick={() => setModal('PC')}>+ PC</button>
                   <button className="btn btn-npc" onClick={() => setModal('NPC')}>+ NPC</button>
                   <span className="toolbar-sep" />
                   <button className="btn btn-clr btn-icon" onClick={undo} disabled={!state.boardPast.length} title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
                   <button className="btn btn-clr btn-icon" onClick={redo} disabled={!state.boardFuture.length} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
-                  <button className="btn btn-ghost-danger" onClick={handleClear} disabled={!state.tokens.length}>Clear</button>
+                  <button className="btn btn-ghost-danger" onClick={handleClear} disabled={boardEmpty}>Clear</button>
                   <span className="toolbar-sep" />
                 </>
               )}
@@ -477,10 +633,18 @@ export default function App() {
               tokens={state.tokens}
               focusedId={focusedId}
               ringAnchor={ringAnchor}
+              map={isGM ? sceneMap : scene}
+              fitKey={fitKey}
+              spawnPoints={isGM ? state.spawnPoints : []}
+              spawnMode={isGM && spawnMode}
               onFocusChange={handleFocusChange}
               onConfirmPosition={handleConfirmPosition}
               onMoveStart={() => dispatch({ type: 'BOARD_SNAPSHOT' })}
               onMoveToken={(id, x, y) => dispatch({ type: 'MOVE_TOKEN', id, x, y })}
+              onAddSpawn={(x, y) => dispatch({ type: 'ADD_SPAWN', x, y })}
+              onRemoveSpawn={index => dispatch({ type: 'REMOVE_SPAWN', index })}
+              onMoveSpawn={(index, x, y) => dispatch({ type: 'MOVE_SPAWN', index, x, y })}
+              onSpawnModeEnd={() => setSpawnMode(false)}
               role={ROLE}
               viewRef={viewRef}
             />
@@ -543,6 +707,7 @@ export default function App() {
           <EncounterBuilder
             encounters={state.encounters}
             adversaries={state.adversaries}
+            maps={state.maps}
             onAdd={entry => dispatch({ type: 'ADD_ENCOUNTER', entry })}
             onEdit={entry => dispatch({ type: 'EDIT_ENCOUNTER', entry })}
             onRemove={id => dispatch({ type: 'REMOVE_ENCOUNTER', id })}
@@ -550,7 +715,41 @@ export default function App() {
             onExport={handleExportEncounter}
           />
         )}
+
+        {isGM && view === 'maps' && (
+          <MapLibrary
+            maps={state.maps}
+            encounters={state.encounters}
+            sceneMapId={state.sceneMapId}
+            onAdd={entry => dispatch({ type: 'ADD_MAP', entry })}
+            onEdit={entry => dispatch({ type: 'EDIT_MAP', entry })}
+            onRemove={id => dispatch({ type: 'REMOVE_MAP', id })}
+            onOpen={handleOpenMap}
+            onExport={handleExportMap}
+          />
+        )}
       </main>
+
+      {deploying && (
+        <DeployDialog
+          encounter={deploying}
+          map={state.maps.find(m => m.id === deploying.mapId) ?? null}
+          library={state.adversaries}
+          characters={state.characters}
+          tokens={state.tokens}
+          onDeploy={pcIds => handleDeployScene(deploying, pcIds)}
+          onClose={() => setDeploying(null)}
+        />
+      )}
+
+      {saveOpen && (
+        <SaveBoardDialog
+          state={state}
+          map={sceneMap}
+          onSave={handleSaveBoard}
+          onClose={() => setSaveOpen(false)}
+        />
+      )}
 
       {modal && (
         <Modal

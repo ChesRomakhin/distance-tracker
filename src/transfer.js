@@ -3,13 +3,23 @@
 // File ids are the source device's ids. They only link records inside the
 // file and are always renumbered on import.
 
-import { makeAdversary, makeCharacter, makeEncounter, findEncounterAdversary } from './constants';
+import {
+  makeAdversary, makeCharacter, makeEncounter, makeMap, migrateEncounter, placementAdversary,
+  DEFAULT_PX_PER_M,
+} from './constants';
 
 const APP_ID = 'dh-tracker';
-export const EXPORT_VERSION = 1;
+export const EXPORT_VERSION = 2;
 
 // MIGRATIONS[v] turns a version-v file into a version-(v + 1) file.
-const MIGRATIONS = {};
+const MIGRATIONS = {
+  // 1 → 2: roster encounters (entries) become placements without positions.
+  1: data => ({
+    ...data,
+    version: 2,
+    encounters: list(data.encounters).map(migrateEncounter),
+  }),
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -43,41 +53,51 @@ const envelope = (kind, data) => ({
   version: EXPORT_VERSION,
   kind,
   exportedAt: new Date().toISOString(),
-  adversaries: [], characters: [], encounters: [],
-  maps: [], propTemplates: [],   // reserved for phases 3–4
+  adversaries: [], characters: [], encounters: [], maps: [],
+  propTemplates: [],   // reserved for phase 4
   ...data,
 });
 
-// Everything. Encounters keep referencing library adversaries in the same file.
+// Everything. Encounters keep referencing library adversaries and maps in the same file.
 export function buildBackup(state) {
   return envelope('backup', {
     adversaries: state.adversaries,
     characters:  state.characters,
     encounters:  state.encounters.map(e => ({ ...e, adversaries: e.adversaries ?? [] })),
+    maps:        state.maps,
   });
 }
 
-// An encounter that carries copies of every adversary it uses.
+// An encounter that carries copies of every adversary it uses (all become local).
 function selfContained(enc, library) {
-  const entries = enc.entries.filter(en => findEncounterAdversary(enc, en.adversaryId, library));
-  const ids = [...new Set(entries.map(en => en.adversaryId))];
-  return { ...enc, entries, adversaries: ids.map(id => findEncounterAdversary(enc, id, library)) };
+  const copies = new Map();
+  const placements = enc.placements.flatMap(p => {
+    const a = placementAdversary(enc, p, library);
+    if (!a) return [];
+    copies.set(a.id, a);
+    return [{ ...p, ref: { local: a.id } }];
+  });
+  return { ...enc, placements, adversaries: [...copies.values()] };
 }
 
-export function buildSelection(state, { adversaryIds = [], characterIds = [], encounterIds = [] }) {
+// Selected encounters bring their map along.
+export function buildSelection(state, { adversaryIds = [], characterIds = [], encounterIds = [], mapIds = [] }) {
   const pick = (list, ids) => list.filter(x => ids.includes(x.id));
+  const encounters = pick(state.encounters, encounterIds);
+  const maps = new Set([...mapIds, ...encounters.map(e => e.mapId).filter(id => id != null)]);
   return envelope('selection', {
     adversaries: pick(state.adversaries, adversaryIds),
     characters:  pick(state.characters, characterIds),
-    encounters:  pick(state.encounters, encounterIds).map(e => selfContained(e, state.adversaries)),
+    encounters:  encounters.map(e => selfContained(e, state.adversaries)),
+    maps:        pick(state.maps, [...maps]),
   });
 }
 
 export const backupFileName    = () => `dh-backup-${today()}.json`;
 export const selectionFileName = () => `dh-export-${today()}.json`;
-export const encounterFileName = enc => {
-  const slug = enc.name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '');
-  return `dh-encounter-${slug || 'encounter'}.json`;
+export const fileNameFor = (kind, name) => {
+  const slug = name.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '');
+  return `dh-${kind}-${slug || kind}.json`;
 };
 
 export function downloadJson(data, filename) {
@@ -94,10 +114,40 @@ export function downloadJson(data, filename) {
 
 // ── Import: parse ─────────────────────────────────────────────────────────────
 
-const list = v => (Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : []);
+function list(v) {
+  return Array.isArray(v) ? v.filter(x => x && typeof x === 'object') : [];
+}
+
+const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 
 // Records without an id get a temporary negative one so they can still be linked.
 const withIds = (items, make) => items.map((x, i) => make({ ...x, id: x.id ?? -(i + 1) }));
+
+function normPlacement(p) {
+  const r = p.ref && typeof p.ref === 'object' ? p.ref : {};
+  const ref = r.local != null ? { local: r.local } : r.lib != null ? { lib: r.lib } : null;
+  if (!ref) return null;
+  const x = num(p.x), y = num(p.y);
+  const placed = x != null && y != null;
+  return {
+    ref,
+    label: typeof p.label === 'string' && p.label.trim() ? p.label : null,
+    x: placed ? x : null,
+    y: placed ? y : null,
+    size: num(p.size) > 0 ? p.size : null,
+  };
+}
+
+const normPoints = pts => list(pts).filter(p => num(p.x) != null && num(p.y) != null).map(p => ({ x: p.x, y: p.y }));
+
+function normBackground(b) {
+  if (!b || typeof b.url !== 'string' || !b.url.trim()) return null;
+  return {
+    url: b.url.trim(),
+    pxPerMeter: num(b.pxPerMeter) > 0 ? b.pxPerMeter : DEFAULT_PX_PER_M,
+    offset: { x: num(b.offset?.x) ?? 0, y: num(b.offset?.y) ?? 0 },
+  };
+}
 
 function normalize(data) {
   return {
@@ -107,11 +157,16 @@ function normalize(data) {
     encounters:  withIds(list(data.encounters), makeEncounter).map(e => ({
       ...e,
       name: e.name || 'Imported encounter',
+      mapId: e.mapId ?? null,
       adversaries: withIds(list(e.adversaries), makeAdversary),
-      entries: list(e.entries).map(en => ({
-        adversaryId: en.adversaryId,
-        count: Math.max(1, Math.floor(Number(en.count)) || 1),
-      })),
+      placements: list(e.placements).map(normPlacement).filter(Boolean),
+      spawnPoints: normPoints(e.spawnPoints),
+    })),
+    maps: withIds(list(data.maps), makeMap).map(m => ({
+      ...m,
+      name: m.name || 'Imported map',
+      background: normBackground(m.background),
+      walls: list(m.walls), rooms: list(m.rooms), props: list(m.props),
     })),
   };
 }
@@ -138,10 +193,11 @@ export function parseImport(text) {
 
 // ── Import: conflicts ─────────────────────────────────────────────────────────
 
-// Library kinds that can clash by name. Phases 3–4 add maps and prop templates.
+// Library kinds that can clash by name. Phase 4 adds prop templates.
 const LIBRARIES = [
   { kind: 'adversary', fileKey: 'adversaries', stateKey: 'adversaries', make: makeAdversary },
   { kind: 'character', fileKey: 'characters',  stateKey: 'characters',  make: makeCharacter },
+  { kind: 'map',       fileKey: 'maps',        stateKey: 'maps',        make: makeMap },
 ];
 
 // Same name as an existing library record but different content.
@@ -164,7 +220,7 @@ export function findConflicts(state, file) {
 export function applyImport(state, file, resolutions = {}) {
   let nextId = state.nextId;
   const summary = {
-    added: { adversary: 0, character: 0, encounter: 0 },
+    added: { adversary: 0, character: 0, encounter: 0, map: 0 },
     replaced: 0, renamed: 0, skipped: 0, unchanged: 0,
   };
   const next = { ...state };
@@ -208,7 +264,8 @@ export function applyImport(state, file, resolutions = {}) {
     next[stateKey] = out;
   }
 
-  // Encounters are always added. Their own adversaries stay inside them.
+  // Encounters are always added. Their own adversaries stay inside them;
+  // their map joins the map list above (or links to an identical one).
   const encounters = file.encounters.map(enc => {
     const localIds = new Map();
     const adversaries = enc.adversaries.map(a => {
@@ -216,15 +273,22 @@ export function applyImport(state, file, resolutions = {}) {
       localIds.set(a.id, id);
       return { ...a, id };
     });
-    const entries = enc.entries
-      .map(en => {
-        const id = localIds.get(en.adversaryId) ?? idMaps.adversary.get(en.adversaryId);
-        return id == null ? null : { ...en, adversaryId: id };
+    const placements = enc.placements
+      .map(p => {
+        const local = p.ref.local != null;
+        const id = local ? localIds.get(p.ref.local) : idMaps.adversary.get(p.ref.lib);
+        return id == null ? null : { ...p, ref: local ? { local: id } : { lib: id } };
       })
       .filter(Boolean);
-    const used = new Set(entries.map(en => en.adversaryId));
+    const used = new Set(placements.filter(p => p.ref.local != null).map(p => p.ref.local));
     summary.added.encounter++;
-    return { ...enc, id: nextId++, entries, adversaries: adversaries.filter(a => used.has(a.id)) };
+    return {
+      ...enc,
+      id: nextId++,
+      mapId: enc.mapId != null ? idMaps.map.get(enc.mapId) ?? null : null,
+      placements,
+      adversaries: adversaries.filter(a => used.has(a.id)),
+    };
   });
 
   next.encounters = [...state.encounters, ...encounters];

@@ -13,6 +13,7 @@ function summaryText(s) {
     s.added.adversary && plural(s.added.adversary, 'adversary', 'adversaries'),
     s.added.character && plural(s.added.character, 'character', 'characters'),
     s.added.encounter && plural(s.added.encounter, 'encounter', 'encounters'),
+    s.added.map && plural(s.added.map, 'map', 'maps'),
   ].filter(Boolean);
   const parts = [
     added.length && `Added ${added.join(', ')}`,
@@ -79,10 +80,13 @@ export default function DataModal({ state, onImport, onClose }) {
   const [advSel,  setAdvSel]  = useState(() => new Set());
   const [charSel, setCharSel] = useState(() => new Set());
   const [encSel,  setEncSel]  = useState(() => new Set());
-  const total = advSel.size + charSel.size + encSel.size;
+  const [mapSel,  setMapSel]  = useState(() => new Set());
+  const total = advSel.size + charSel.size + encSel.size + mapSel.size;
 
   const exportSelected = () => downloadJson(
-    buildSelection(state, { adversaryIds: [...advSel], characterIds: [...charSel], encounterIds: [...encSel] }),
+    buildSelection(state, {
+      adversaryIds: [...advSel], characterIds: [...charSel], encounterIds: [...encSel], mapIds: [...mapSel],
+    }),
     selectionFileName(),
   );
 
@@ -113,8 +117,10 @@ export default function DataModal({ state, onImport, onClose }) {
 
   // Names a rename must avoid: everything in the libraries and in the file.
   const takenNames = () => new Set(
-    [...state.adversaries, ...state.characters, ...pending.file.adversaries, ...pending.file.characters]
-      .map(x => normName(x.name)),
+    [
+      ...state.adversaries, ...state.characters, ...state.maps,
+      ...pending.file.adversaries, ...pending.file.characters, ...pending.file.maps,
+    ].map(x => normName(x.name)),
   );
 
   return (
@@ -127,7 +133,10 @@ export default function DataModal({ state, onImport, onClose }) {
 
           {tab === 'export' ? (
             <>
-              <p className="data-hint">A backup holds all adversaries, characters and encounters.</p>
+              <p className="data-hint">
+                A backup holds all adversaries, characters, encounters and maps. Map images are not
+                in the file — only their URLs.
+              </p>
               <button className="btn btn-pc" onClick={() => downloadJson(buildBackup(state), backupFileName())}>
                 Export everything (backup)
               </button>
@@ -140,9 +149,10 @@ export default function DataModal({ state, onImport, onClose }) {
               <PickGroup title="Characters" items={state.characters} selected={charSel} onChange={setCharSel} />
               <PickGroup
                 title="Encounters" items={state.encounters} selected={encSel} onChange={setEncSel}
-                detail={e => plural(e.entries.reduce((n, en) => n + en.count, 0), 'unit', 'units')}
+                detail={e => plural(e.placements.length, 'unit', 'units')}
               />
-              <p className="data-hint">Encounters are exported with copies of their adversaries.</p>
+              <PickGroup title="Maps" items={state.maps} selected={mapSel} onChange={setMapSel} />
+              <p className="data-hint">Encounters are exported with copies of their adversaries and with their map.</p>
 
               <div className="modal-btns">
                 <button className="btn btn-clr" onClick={onClose}>Close</button>
@@ -154,8 +164,9 @@ export default function DataModal({ state, onImport, onClose }) {
           ) : (
             <>
               <p className="data-hint">
-                Pick a .json file exported from DH Tracker. Adversaries and characters go to your
-                libraries. Adversaries that come inside an encounter stay in that encounter.
+                Pick a .json file exported from DH Tracker. Adversaries, characters and maps go to your
+                libraries. Adversaries that come inside an encounter stay in that encounter; its map
+                is added to your maps.
               </p>
               <input key={inputKey} type="file" accept=".json,application/json" onChange={handleFile} />
               {error   && <p className="data-error">{error}</p>}

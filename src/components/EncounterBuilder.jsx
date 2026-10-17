@@ -2,16 +2,19 @@ import { useState } from 'react';
 import Dialog from './Dialog';
 import LibraryHeader from './LibraryHeader';
 import { useConfirm } from './Feedback';
-import { makeEncounter, findEncounterAdversary } from '../constants';
+import { makeEncounter, encounterGroups, placementAdversary, refId } from '../constants';
+import { canDeploy } from '../scene';
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+const groupAdversary = (enc, g, library) => placementAdversary(enc, { ref: g.ref }, library);
 
 // "T1 ×3 · T4 ×1" — how many units of each tier the encounter fields.
 export function tierSummary(enc, library) {
   const byTier = {};
-  enc.entries.forEach(e => {
-    const a = findEncounterAdversary(enc, e.adversaryId, library);
-    if (a) byTier[a.tier] = (byTier[a.tier] || 0) + e.count;
+  enc.placements.forEach(p => {
+    const a = placementAdversary(enc, p, library);
+    if (a) byTier[a.tier] = (byTier[a.tier] || 0) + 1;
   });
   return Object.keys(byTier).sort().map(t => `T${t} ×${byTier[t]}`).join(' · ');
 }
@@ -53,41 +56,49 @@ function AdversaryPicker({ adversaries, onPick }) {
   );
 }
 
-function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
+const unplaced = ref => ({ ref, label: null, x: null, y: null, size: null });
+
+function EncounterEditor({ draft: initial, adversaries, maps, onSave, onCancel }) {
   const [draft, setDraft] = useState(initial);
   const [tried, setTried] = useState(false);
   const confirm = useConfirm();
 
-  const addEntry = id => setDraft(d => {
-    const existing = d.entries.find(e => e.adversaryId === id);
-    if (existing) {
-      return { ...d, entries: d.entries.map(e => e.adversaryId === id ? { ...e, count: e.count + 1 } : e) };
-    }
-    return { ...d, entries: [...d.entries, { adversaryId: id, count: 1 }] };
+  const sameRef = key => p => refId(p.ref) === key;
+
+  // New units have no position — they are placed around the others at deploy.
+  const addLib = id => setDraft(d => {
+    const existing = d.placements.find(sameRef(id));
+    return { ...d, placements: [...d.placements, unplaced(existing?.ref ?? { lib: id })] };
   });
 
-  const setCount = (id, count) =>
-    setDraft(d => ({ ...d, entries: d.entries.map(e => e.adversaryId === id ? { ...e, count } : e) }));
+  const addOne = g => setDraft(d => ({ ...d, placements: [...d.placements, unplaced(g.ref)] }));
 
-  const removeEntry = id =>
-    setDraft(d => ({ ...d, entries: d.entries.filter(e => e.adversaryId !== id) }));
+  // Drop a unit without a position first, so the laid-out ones stay.
+  const removeOne = key => setDraft(d => {
+    const mine = d.placements.map((p, i) => [p, i]).filter(([p]) => sameRef(key)(p));
+    const pick = [...mine].reverse().find(([p]) => p.x == null) ?? mine[mine.length - 1];
+    return { ...d, placements: d.placements.filter((_, i) => i !== pick[1]) };
+  });
 
-  const nameOf = id => findEncounterAdversary(draft, id, adversaries)?.name ?? '(deleted)';
-  const isLocal = id => draft.adversaries?.some(a => a.id === id);
+  const removeGroup = key =>
+    setDraft(d => ({ ...d, placements: d.placements.filter(p => !sameRef(key)(p)) }));
+
+  const groups = encounterGroups(draft);
+  const nameOf = g => groupAdversary(draft, g, adversaries)?.name ?? '(deleted)';
   const nameMissing = !draft.name.trim();
 
-  // Drop local adversaries that no entry uses any more.
+  // Drop local adversaries that no placement uses any more.
   const save = () => {
     setTried(true);
     if (nameMissing) return;
-    const used = new Set(draft.entries.map(e => e.adversaryId));
+    const used = new Set(draft.placements.filter(p => p.ref.local != null).map(p => p.ref.local));
     onSave({ ...draft, adversaries: (draft.adversaries ?? []).filter(a => used.has(a.id)) });
   };
   const close = () => {
     if (JSON.stringify(draft) === JSON.stringify(initial)) { onCancel(); return; }
     confirm({ title: 'Discard changes?', message: 'Your edits to this encounter will be lost.', confirmLabel: 'Discard', onConfirm: onCancel });
   };
-  const totalUnits = draft.entries.reduce((n, e) => n + e.count, 0);
+  const totalUnits = draft.placements.length;
 
   return (
     <Dialog title={initial.id == null ? 'New Encounter' : 'Edit Encounter'} onClose={close} wide>
@@ -103,26 +114,49 @@ function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
         {tried && nameMissing && <em className="field-error">Name is required.</em>}
       </label>
 
-      <AdversaryPicker adversaries={adversaries} onPick={addEntry} />
+      <div className="form-grid">
+        <label className="field">
+          <span>Map</span>
+          <select
+            value={draft.mapId ?? ''}
+            onChange={e => setDraft(d => ({ ...d, mapId: e.target.value === '' ? null : Number(e.target.value) }))}
+          >
+            <option value="">No map</option>
+            {maps.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        <div className="field">
+          <span>Spawn points</span>
+          <p className="enc-spawn-info">
+            {draft.spawnPoints.length || 'None'} · set on the board, then <b>Save to encounter</b>
+          </p>
+        </div>
+      </div>
 
-      {draft.entries.length === 0 ? (
+      <AdversaryPicker adversaries={adversaries} onPick={addLib} />
+
+      {groups.length === 0 ? (
         <p className="library-empty">No adversaries in this encounter yet.</p>
       ) : (
         <div className="enc-rows">
-          {draft.entries.map(e => (
-            <div key={e.adversaryId} className="enc-row">
-              <span className="enc-row-name">
-                {nameOf(e.adversaryId)}
-                {isLocal(e.adversaryId) && <span className="stat-pill enc-local" title="Came with an imported file; not in the library">local</span>}
-              </span>
-              <div className="enc-count">
-                <button className="stepper-btn" aria-label="One less" onClick={() => setCount(e.adversaryId, Math.max(1, e.count - 1))} disabled={e.count <= 1}>−</button>
-                <span className="stepper-value">{e.count}</span>
-                <button className="stepper-btn" aria-label="One more" onClick={() => setCount(e.adversaryId, e.count + 1)}>+</button>
+          {groups.map(g => {
+            const key = refId(g.ref);
+            return (
+              <div key={key} className="enc-row">
+                <span className="enc-row-name">
+                  {nameOf(g)}
+                  {g.ref.local != null && <span className="stat-pill enc-local" title="Came with an imported file; not in the library">local</span>}
+                  {g.placed > 0 && <span className="stat-pill enc-local" title="Units with a saved position on the map">{g.placed} on map</span>}
+                </span>
+                <div className="enc-count">
+                  <button className="stepper-btn" aria-label="One less" onClick={() => removeOne(key)} disabled={g.count <= 1}>−</button>
+                  <span className="stepper-value">{g.count}</span>
+                  <button className="stepper-btn" aria-label="One more" onClick={() => addOne(g)}>+</button>
+                </div>
+                <button className="icon-btn" aria-label={`Remove ${nameOf(g)}`} title="Remove" onClick={() => removeGroup(key)}>✕</button>
               </div>
-              <button className="icon-btn" aria-label={`Remove ${nameOf(e.adversaryId)}`} title="Remove" onClick={() => removeEntry(e.adversaryId)}>✕</button>
-            </div>
-          ))}
+            );
+          })}
           <div className="enc-total">{plural(totalUnits, 'unit')} · {tierSummary(draft, adversaries)}</div>
         </div>
       )}
@@ -135,7 +169,7 @@ function EncounterEditor({ draft: initial, adversaries, onSave, onCancel }) {
   );
 }
 
-export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdit, onRemove, onDeploy, onExport }) {
+export default function EncounterBuilder({ encounters, adversaries, maps, onAdd, onEdit, onRemove, onDeploy, onExport }) {
   const [editing, setEditing] = useState(null);
   const confirm = useConfirm();
 
@@ -145,10 +179,9 @@ export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdi
     setEditing(null);
   };
 
-  const summary = enc => {
-    const units = enc.entries.reduce((n, e) => n + e.count, 0);
-    return `${plural(enc.entries.length, 'type')} · ${plural(units, 'unit')}`;
-  };
+  const summary = enc =>
+    `${plural(encounterGroups(enc).length, 'type')} · ${plural(enc.placements.length, 'unit')}`;
+  const mapName = enc => maps.find(m => m.id === enc.mapId)?.name;
 
   return (
     <div className="library">
@@ -167,17 +200,21 @@ export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdi
                 <span className="entity-name">{enc.name}</span>
                 <span className="entity-tag">{summary(enc)}</span>
               </div>
-              {enc.entries.length > 0 && <div className="stat-row"><span className="stat-pill">{tierSummary(enc, adversaries)}</span></div>}
+              {(enc.placements.length > 0 || mapName(enc) || enc.spawnPoints.length > 0) && (
+                <div className="stat-row">
+                  {enc.placements.length > 0 && <span className="stat-pill">{tierSummary(enc, adversaries)}</span>}
+                  {mapName(enc) && <span className="stat-pill">Map <b>{mapName(enc)}</b></span>}
+                  {enc.spawnPoints.length > 0 && <span className="stat-pill">{plural(enc.spawnPoints.length, 'spawn point')}</span>}
+                </div>
+              )}
               <div className="entity-line entity-notes">
-                {enc.entries.length === 0
-                  ? '(empty)'
-                  : enc.entries.map(e => {
-                      const a = findEncounterAdversary(enc, e.adversaryId, adversaries);
-                      return `${a?.name ?? '(deleted)'} ×${e.count}`;
-                    }).join(', ')}
+                {enc.placements.length === 0
+                  ? '(no adversaries)'
+                  : encounterGroups(enc).map(g =>
+                      `${groupAdversary(enc, g, adversaries)?.name ?? '(deleted)'} ×${g.count}`).join(', ')}
               </div>
               <div className="entity-card-btns">
-                <button className="btn btn-npc btn-sm" onClick={() => onDeploy(enc)} disabled={!enc.entries.length}>Deploy to map</button>
+                <button className="btn btn-npc btn-sm" onClick={() => onDeploy(enc)} disabled={!canDeploy(enc)}>Deploy to map</button>
                 <button className="btn btn-clr btn-sm" onClick={() => setEditing(enc)}>Edit</button>
                 <button className="btn btn-clr btn-sm" onClick={() => onExport(enc)} title="Download as a file with its adversaries">Export</button>
                 <button
@@ -198,6 +235,7 @@ export default function EncounterBuilder({ encounters, adversaries, onAdd, onEdi
         <EncounterEditor
           draft={editing}
           adversaries={adversaries}
+          maps={maps}
           onSave={save}
           onCancel={() => setEditing(null)}
         />
