@@ -31,7 +31,9 @@ Encounter {
   spawnPoints: [{ x, y }],           // точки спауна PC
 }
 
-Board (текущая сессия) { tokens, sceneMapId, spawnPoints }
+Board (текущая сессия) { tokens, sceneMapId, spawnPoints, areas }
+
+Area { id, name, x, y, radius, originSize, color, hidden }   // область эффекта, круг на доске
 
 ExportFile { app: 'dh-tracker', version, kind: 'backup' | 'selection',
              adversaries[], characters[], encounters[], maps[], propTemplates[] }
@@ -87,6 +89,14 @@ ExportFile { app: 'dh-tracker', version, kind: 'backup' | 'selection',
 - [ ] GM открывает / закрывает комнату кликом в Play.
 - [ ] На экране игроков закрытые комнаты затемнены, токены и пропсы внутри не видны.
 - [ ] GM видит закрытые комнаты полупрозрачными.
+
+## Области эффекта (см. `AREAS.md`)
+
+- [x] Круг на доске: радиус по дистанции (Melee / Very Close / Close / Far, от края токена-источника) или в метрах.
+- [x] Создание от выбранного токена (**Area from here**, **+ Area**) или в центре экрана. Область остаётся на месте, когда токен двигается.
+- [x] Перемещение за ярлык, редактирование в боковой панели: имя, радиус, цвет, список токенов внутри.
+- [x] Скрытая область видна только ГМ. Остальные уходят на экран игроков.
+- [x] Undo / Redo, Clear, Deploy сцены очищает области.
 
 ---
 

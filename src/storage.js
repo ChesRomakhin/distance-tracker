@@ -40,6 +40,7 @@ export function loadState(fallback) {
     // before the switch to metres) — clear the board, keep libraries/encounters.
     if (parsed.schemaVersion !== fallback.schemaVersion) {
       merged.tokens = [];
+      merged.areas = [];
       merged.schemaVersion = fallback.schemaVersion;
     }
 

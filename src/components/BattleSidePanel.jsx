@@ -3,7 +3,8 @@ import StatStepper from './StatStepper';
 import { tierSummary } from './EncounterBuilder';
 import { canDeploy } from '../scene';
 import {
-  TYPE_FILL, DIST_COLOR, DIST_SHORT, SIZE_PRESETS, rangeM, bandOf, tokenLabel,
+  TYPE_FILL, DIST_COLOR, DIST_SHORT, DIST_METERS, DISTANCES, SIZE_PRESETS, AREA_COLORS,
+  rangeM, bandOf, tokenLabel, areaRadius, inArea,
 } from '../constants';
 
 // Daggerheart damage → HP marked: below Major 1, Major 2, Severe 3.
@@ -56,7 +57,7 @@ function DamageInput({ token, onApply }) {
   );
 }
 
-function SelectedUnit({ token, source, moved, onUpdateStats, onRemoveToken, onDeselect, onConfirmMove, onRevertMove }) {
+function SelectedUnit({ token, source, moved, onUpdateStats, onRemoveToken, onDeselect, onConfirmMove, onRevertMove, onAddArea }) {
   const isPC  = token.refKind === 'character';
   const isAdv = token.refKind === 'adversary';
   const set = patch => onUpdateStats(token.id, patch);
@@ -170,10 +171,153 @@ function SelectedUnit({ token, source, moved, onUpdateStats, onRemoveToken, onDe
         </details>
       )}
 
-      <button className="btn btn-ghost-danger btn-sm sp-remove" onClick={() => onRemoveToken(token.id)} title="Remove from map (Del)">
-        Remove from map
+      <div className="sp-unit-actions">
+        <button className="btn btn-clr btn-sm" onClick={() => onAddArea(token)} title="An area of effect centred here — smoke, fire… It stays put when the unit moves.">
+          Area from here
+        </button>
+        <button className="btn btn-ghost-danger btn-sm" onClick={() => onRemoveToken(token.id)} title="Remove from map (Del)">
+          Remove from map
+        </button>
+      </div>
+    </section>
+  );
+}
+
+const AREA_BANDS = DISTANCES.filter(d => DIST_METERS[d] != null);
+
+// Text that is committed on blur / Enter — one undo step per edit, not per key.
+function CommitInput({ value, onCommit, ...rest }) {
+  const [draft, setDraft] = useState(null);
+  const commit = () => {
+    if (draft != null && draft !== String(value)) onCommit(draft);
+    setDraft(null);
+  };
+  return (
+    <input
+      {...rest}
+      value={draft ?? value}
+      onChange={e => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') { setDraft(null); e.currentTarget.blur(); }
+      }}
+    />
+  );
+}
+
+function SelectedArea({ area, tokens, onUpdate, onRemove, onDeselect, onSelectToken }) {
+  const set = patch => onUpdate(area.id, patch);
+  const inside = tokens.filter(t => inArea(area, t));
+
+  return (
+    <section className="sp-selected" aria-label="Selected area">
+      <div className="sp-selected-head">
+        <span className="sp-dot" style={{ background: area.color }} />
+        <CommitInput
+          className="sp-area-name"
+          aria-label="Area name"
+          value={area.name}
+          onCommit={v => set({ name: v.trim() || 'Area' })}
+        />
+        <button className="icon-btn" onClick={onDeselect} title="Deselect (Esc)" aria-label="Deselect">✕</button>
+      </div>
+
+      <div className="sp-area-field">
+        <span className="stepper-label">Radius</span>
+        <div className="sp-area-radius">
+          {AREA_BANDS.map(d => {
+            const r = areaRadius(d, area.originSize);
+            const on = Math.abs(area.radius - r) < 1e-6;
+            return (
+              <button
+                key={d}
+                className={`chip ${on ? 'active' : ''}`}
+                aria-pressed={on}
+                onClick={() => set({ radius: r })}
+                title={`Within ${d} of ${area.originSize > 1 ? 'a size-' + area.originSize + ' unit' : 'the centre'} — ${+r.toFixed(2)} m`}
+              >
+                <span className="legend-swatch" style={{ background: DIST_COLOR[d] }} />{DIST_SHORT[d]}
+              </button>
+            );
+          })}
+          <label className="sp-area-metres">
+            <CommitInput
+              type="number" min={0.5} step={0.5} inputMode="decimal"
+              aria-label="Radius in metres"
+              value={+area.radius.toFixed(2)}
+              onCommit={v => { const r = Number(v); if (r > 0) set({ radius: r }); }}
+            />
+            m
+          </label>
+        </div>
+      </div>
+
+      <div className="sp-area-field">
+        <span className="stepper-label">Colour</span>
+        <div className="sp-area-colors" role="group" aria-label="Area colour">
+          {AREA_COLORS.map(c => (
+            <button
+              key={c}
+              className={`sp-swatch ${area.color === c ? 'active' : ''}`}
+              style={{ background: c }}
+              aria-pressed={area.color === c}
+              aria-label={`Colour ${c}`}
+              onClick={() => set({ color: c })}
+            />
+          ))}
+        </div>
+      </div>
+
+      <label className="pick-item">
+        <input type="checkbox" checked={area.hidden} onChange={e => set({ hidden: e.target.checked })} />
+        Hidden from players
+      </label>
+
+      <div className="sp-area-field">
+        <span className="stepper-label">Inside <span className="sp-count">{inside.length}</span></span>
+        {inside.length === 0 ? (
+          <p className="sp-empty">Nobody is in the area.</p>
+        ) : (
+          <div className="sp-list">
+            {inside.map(t => (
+              <button key={t.id} className="sp-add-row" onClick={() => onSelectToken(t.id)} title={t.name}>
+                <span className="sp-dot" style={{ background: TYPE_FILL[t.type] }} />
+                <span className="sp-add-name">{t.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button className="btn btn-ghost-danger btn-sm sp-remove" onClick={() => onRemove(area.id)} title="Remove the area (Del)">
+        Remove area
       </button>
     </section>
+  );
+}
+
+function Areas({ areas, selectedArea, onSelect }) {
+  if (!areas.length) return null;
+  return (
+    <details className="sp-section" open>
+      <summary className="sp-section-title">Areas <span className="sp-count">{areas.length}</span></summary>
+      <div className="sp-list sp-board">
+        {areas.map(a => (
+          <button
+            key={a.id}
+            className={`sp-add-row ${a.id === selectedArea?.id ? 'current' : ''}`}
+            onClick={() => onSelect(a.id)}
+            title={a.name}
+          >
+            <span className="sp-dot" style={{ background: a.color }} />
+            <span className="sp-add-name">{a.name}</span>
+            {a.hidden && <span className="sp-add-tier">hidden</span>}
+            <span className="sp-add-tier">{+a.radius.toFixed(1)} m</span>
+          </button>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -305,6 +449,7 @@ function AddUnits({ characters, adversaries, encounters, tokens, onAddCharacter,
 
 export default function BattleSidePanel({
   characters, adversaries, encounters, tokens, findAdversary, focusedToken, ringAnchor, open,
+  areas, selectedArea, onAddArea, onUpdateArea, onRemoveArea, onSelectArea,
   onQuickAddCharacter, onQuickAddAdversary, onDeployEncounter,
   onUpdateStats, onRemoveToken, onDeselect, onSelect, onConfirmMove, onRevertMove,
 }) {
@@ -331,11 +476,23 @@ export default function BattleSidePanel({
           onDeselect={onDeselect}
           onConfirmMove={onConfirmMove}
           onRevertMove={onRevertMove}
+          onAddArea={onAddArea}
+        />
+      ) : selectedArea ? (
+        <SelectedArea
+          key={selectedArea.id}
+          area={selectedArea}
+          tokens={tokens}
+          onUpdate={onUpdateArea}
+          onRemove={onRemoveArea}
+          onDeselect={() => onSelectArea(null)}
+          onSelectToken={onSelect}
         />
       ) : (
         tokens.length > 0 && <p className="sp-hint">Click a unit on the map or in the list to track its stats.</p>
       )}
       <OnBoard tokens={tokens} focusedToken={focusedToken} ringAnchor={ringAnchor} onSelect={onSelect} />
+      <Areas areas={areas} selectedArea={selectedArea} onSelect={onSelectArea} />
       <AddUnits
         characters={characters}
         adversaries={adversaries}

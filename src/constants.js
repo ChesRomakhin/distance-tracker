@@ -63,6 +63,24 @@ export function rangeM(a, b, from = a) {
   return Math.max(0, centre - tokenRadiusM(a) - tokenRadiusM(b) + TOKEN_DIAMETER_M);
 }
 
+// ── Areas of effect ─────────────────────────────────────────────────────────
+// A circle fixed on the board (smoke, a burning patch). radius is in metres
+// from the centre; originSize is the size of the token it was cast from (1 for a point).
+export const AREA_COLORS = ['#94a3b8', '#fb7185', '#c084fc', '#4ade80', '#67e8f9'];
+
+export function makeArea(over = {}) {
+  return { id: null, name: 'Area', x: 0, y: 0, radius: 4.5, originSize: 1, color: AREA_COLORS[0], hidden: false, ...over };
+}
+
+// "Within <band> of the caster" — the same circle as the caster's ring for that band.
+export const areaRadius = (band, originSize = 1) =>
+  DIST_METERS[band] + (TOKEN_DIAMETER_M / 2) * ((originSize || 1) - 1);
+
+// A token is inside on the same terms as the rings: a standard token by its
+// centre, bigger ones as soon as their extra radius reaches in.
+export const inArea = (area, tok) =>
+  Math.hypot(tok.x - area.x, tok.y - area.y) <= area.radius + tokenRadiusM(tok) - TOKEN_DIAMETER_M / 2 + 1e-6;
+
 // The range band a distance in metres falls into.
 export function bandOf(m) {
   return DISTANCES.find(d => DIST_METERS[d] != null && m <= DIST_METERS[d] + 1e-6) ?? 'Very Far';

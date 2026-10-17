@@ -923,6 +923,39 @@ summary.sp-section-title:hover { color: var(--text-sub); }
 .sp-features .feature { margin-top: 8px; font-size: 0.76rem; }
 
 .sp-remove { margin-top: 16px; align-self: flex-start; }
+.sp-unit-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+
+/* Selected area of effect */
+.sp-area-name,
+.sp-area-metres input {
+  min-width: 0;
+  padding: 4px 8px;
+  background: var(--bg);
+  border: 1px solid #374151;
+  border-radius: 7px;
+  color: var(--text);
+  font-size: 0.82rem;
+  outline: none;
+}
+.sp-area-name { flex: 1; font-weight: 700; font-size: 0.92rem; }
+.sp-area-name:focus, .sp-area-metres input:focus { border-color: #4f46e5; }
+.sp-area-field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.sp-area-radius { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.sp-area-radius .chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; }
+.sp-area-radius .legend-swatch { width: 10px; }
+.sp-area-metres { display: inline-flex; align-items: center; gap: 4px; font-size: 0.78rem; color: var(--text-sub); }
+.sp-area-metres input { width: 64px; }
+.sp-area-colors { display: flex; gap: 6px; }
+.sp-swatch {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.sp-swatch:hover { opacity: 1; }
+.sp-swatch.active { opacity: 1; border-color: var(--text); }
 
 /* Drawer toggle (narrow screens only) */
 .sp-toggle { display: none; }

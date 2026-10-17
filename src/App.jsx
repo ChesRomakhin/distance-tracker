@@ -12,7 +12,7 @@ import SaveBoardDialog from './components/SaveBoardDialog';
 import { useConfirm, useToast } from './components/Feedback';
 import {
   tokenStatsFromCharacter, tokenStatsFromAdversary, makeCharacter,
-  spawnPositions, backgroundRect, PX_PER_M,
+  spawnPositions, backgroundRect, makeArea, areaRadius, PX_PER_M,
 } from './constants';
 import { applyImport, buildSelection, downloadJson, fileNameFor } from './transfer';
 import { adversarySpecs, findAnyAdversary, isScene, planDeploy, sceneCenter } from './scene';
@@ -51,6 +51,7 @@ const initial = {
   tokens: [],
   sceneMapId: null,  // map on the board (the map itself is reused across encounters)
   spawnPoints: [],   // PC spawn points marked on the board, in order
+  areas: [],         // areas of effect on the board (smoke, fire…)
   adversaries: SEED_ADVERSARIES,
   characters: [],
   encounters: [],
@@ -62,14 +63,15 @@ const initial = {
   boardFuture: [],   // … and redo
 };
 
-// Board actions that get an undo step. MOVE_TOKEN / MOVE_SPAWN fire on every
+// Board actions that get an undo step. MOVE_TOKEN / MOVE_SPAWN / MOVE_AREA fire on every
 // drag frame, so drags record one step up front via BOARD_SNAPSHOT instead.
 const BOARD_ACTIONS = new Set([
   'ADD_TOKENS', 'ADD_PC', 'REMOVE_TOKEN', 'UPDATE_TOKEN_STATS', 'CLEAR', 'BOARD_SNAPSHOT',
   'SET_SCENE_MAP', 'ADD_SPAWN', 'REMOVE_SPAWN', 'DEPLOY_SCENE',
+  'ADD_AREA', 'UPDATE_AREA', 'REMOVE_AREA',
 ]);
 
-const boardOf = s => ({ tokens: s.tokens, sceneMapId: s.sceneMapId, spawnPoints: s.spawnPoints });
+const boardOf = s => ({ tokens: s.tokens, sceneMapId: s.sceneMapId, spawnPoints: s.spawnPoints, areas: s.areas });
 
 const newToken = (t, id) => ({
   id, name: t.name, type: t.tokenType,
@@ -134,9 +136,21 @@ function reducer(state, action) {
         sceneMapId: action.mapId,
         spawnPoints: action.spawnPoints,
         tokens: [...action.keep, ...added],
+        areas: [],
         nextId: id,
       };
     }
+
+    // ── Areas of effect ──
+    case 'ADD_AREA':
+      return { ...state, areas: [...state.areas, { ...action.area, id: state.nextId }], nextId: state.nextId + 1 };
+    case 'UPDATE_AREA':
+    case 'MOVE_AREA': {
+      const patch = action.type === 'MOVE_AREA' ? { x: action.x, y: action.y } : action.patch;
+      return { ...state, areas: state.areas.map(a => (a.id === action.id ? { ...a, ...patch } : a)) };
+    }
+    case 'REMOVE_AREA':
+      return { ...state, areas: state.areas.filter(a => a.id !== action.id) };
     case 'ADD_PC': {
       // Adding a PC from the battle map also registers it in the Characters tab.
       const charId  = state.nextId;
@@ -170,9 +184,9 @@ function reducer(state, action) {
         ),
       };
     case 'CLEAR':
-      return { ...state, tokens: [], spawnPoints: [] };   // board only — the map and libraries stay
-    case 'SET_TOKENS':
-      return { ...state, tokens: action.tokens };
+      return { ...state, tokens: [], spawnPoints: [], areas: [] };   // board only — the map and libraries stay
+    case 'SET_BOARD':
+      return { ...state, tokens: action.tokens, areas: action.areas ?? [] };
 
     // ── Library: adversaries ──
     case 'ADD_ADVERSARY':
@@ -290,6 +304,7 @@ export default function App() {
   const [scene,      setScene]      = useState(null);    // player: the map received from the GM
   const [focusedId,  setFocusedId]  = useState(null);
   const [ringAnchor, setRingAnchor] = useState(null);    // { x, y } — where rings are pinned
+  const [areaId,     setAreaId]     = useState(null);    // GM: selected area of effect
   const [panelOpen,  setPanelOpen]  = useState(false);   // side panel drawer on narrow screens
   const [link,       setLink]       = useState('waiting'); // player: 'waiting'|'live'|'lost'
   const viewRef = useRef(null);                            // map viewport, survives tab switches
@@ -299,8 +314,10 @@ export default function App() {
   const sceneMap = state.maps.find(m => m.id === state.sceneMapId) ?? null;
 
   // Always-fresh ref for the REQUEST_STATE handler
-  const latestRef = useRef({ tokens: state.tokens, focusedId, ringAnchor, sceneMap });
-  useEffect(() => { latestRef.current = { tokens: state.tokens, focusedId, ringAnchor, sceneMap }; });
+  // Hidden areas (traps) stay on the GM's screen.
+  const playerAreas = state.areas.filter(a => !a.hidden);
+  const latestRef = useRef({ tokens: state.tokens, areas: playerAreas, focusedId, ringAnchor, sceneMap });
+  useEffect(() => { latestRef.current = { tokens: state.tokens, areas: playerAreas, focusedId, ringAnchor, sceneMap }; });
 
   // ── Persistence (GM only) ────────────────────────────────────────────────
   useEffect(() => {
@@ -311,15 +328,21 @@ export default function App() {
 
   const isGM = ROLE === 'gm';
   const focusedToken = state.tokens.find(t => t.id === focusedId) ?? null;
+  const selectedArea = state.areas.find(a => a.id === areaId) ?? null;
 
   // Selection vanished (undo, removal) → drop it.
   useEffect(() => {
     if (isGM && focusedId != null && !focusedToken) { setFocusedId(null); setRingAnchor(null); }
   }, [isGM, focusedId, focusedToken]);
+  useEffect(() => {
+    if (areaId != null && !selectedArea) setAreaId(null);
+  }, [areaId, selectedArea]);
 
   // ── Focus helpers ──────────────────────────────────────────────────────────
+  // A token and an area are never selected at the same time.
   const handleFocusChange = id => {
     setFocusedId(id);
+    setAreaId(null);
     if (id != null) {
       const tok = state.tokens.find(t => t.id === id);
       if (tok) setRingAnchor({ x: tok.x, y: tok.y });
@@ -327,6 +350,13 @@ export default function App() {
     } else {
       setRingAnchor(null);
     }
+  };
+
+  const handleSelectArea = id => {
+    setFocusedId(null);
+    setRingAnchor(null);
+    setAreaId(id);
+    if (id != null && narrowScreen()) setPanelOpen(true);
   };
 
   // Snap rings to the focused token's current position
@@ -344,8 +374,8 @@ export default function App() {
   // ── GM: broadcast state ────────────────────────────────────────────────────
   useEffect(() => {
     if (ROLE !== 'gm') return;
-    CHANNEL.postMessage({ type: 'STATE_UPDATE', tokens: state.tokens, focusedId, ringAnchor });
-  }, [state.tokens, focusedId, ringAnchor]);
+    CHANNEL.postMessage({ type: 'STATE_UPDATE', tokens: state.tokens, areas: state.areas.filter(a => !a.hidden), focusedId, ringAnchor });
+  }, [state.tokens, state.areas, focusedId, ringAnchor]);
 
   // The whole map goes out only when the scene changes (or the map is edited).
   useEffect(() => {
@@ -385,7 +415,7 @@ export default function App() {
         return;
       }
       if (type !== 'STATE_UPDATE') return;
-      dispatch({ type: 'SET_TOKENS', tokens: e.data.tokens });
+      dispatch({ type: 'SET_BOARD', tokens: e.data.tokens, areas: e.data.areas });
       setFocusedId(e.data.focusedId);
       setRingAnchor(e.data.ringAnchor);
     };
@@ -471,6 +501,29 @@ export default function App() {
     toast(`“${map.name}” is on the board.`, undoAction);
   };
 
+  // An area cast from a token starts on it (and stays put after); otherwise mid-screen.
+  const handleAddArea = origin => {
+    const centre = origin ? { x: origin.x, y: origin.y } : spawnCenter();
+    const originSize = origin?.size || 1;
+    const id = state.nextId;
+    dispatch({
+      type: 'ADD_AREA',
+      area: makeArea({
+        name: origin ? `${origin.name}: area` : 'Area',
+        ...centre, originSize, radius: areaRadius('Very Close', originSize),
+      }),
+    });
+    handleSelectArea(id);
+    toast('Area added — set its size in the panel.', undoAction);
+  };
+
+  const handleRemoveArea = id => {
+    const area = state.areas.find(a => a.id === id);
+    dispatch({ type: 'REMOVE_AREA', id });
+    if (areaId === id) setAreaId(null);
+    if (area) toast(`Removed ${area.name}.`, undoAction);
+  };
+
   const handleRemoveToken = id => {
     const tok = state.tokens.find(t => t.id === id);
     dispatch({ type: 'REMOVE_TOKEN', id });
@@ -478,18 +531,19 @@ export default function App() {
     if (tok) toast(`Removed ${tok.name}.`, undoAction);
   };
 
-  const boardEmpty = !state.tokens.length && !state.spawnPoints.length;
+  const boardEmpty = !state.tokens.length && !state.spawnPoints.length && !state.areas.length;
 
   const handleClear = () => {
     if (boardEmpty) return;
     confirm({
       title: 'Clear the board?',
-      message: `Removes all ${state.tokens.length} tokens with their HP and Stress, and the spawn points. The map and your libraries are kept, and you can undo this.`,
+      message: `Removes all ${state.tokens.length} tokens with their HP and Stress, the spawn points and areas. The map and your libraries are kept, and you can undo this.`,
       confirmLabel: 'Clear board',
       onConfirm: () => {
         dispatch({ type: 'CLEAR' });
         setFocusedId(null);
         setRingAnchor(null);
+        setAreaId(null);
         toast('Board cleared.', undoAction);
       },
     });
@@ -517,6 +571,15 @@ export default function App() {
     if (mod || e.altKey || view !== 'map') return;
 
     if (e.key === 'Escape' && spawnMode) setSpawnMode(false);
+    else if (e.key === 'Escape' && selectedArea) setAreaId(null);
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && selectedArea) handleRemoveArea(selectedArea.id);
+    else if (e.key.startsWith('Arrow') && selectedArea) {
+      const step = e.shiftKey ? 0.5 : 1.5;
+      const dx = { ArrowLeft: -step, ArrowRight: step }[e.key] ?? 0;
+      const dy = { ArrowUp: -step, ArrowDown: step }[e.key] ?? 0;
+      dispatch({ type: 'BOARD_SNAPSHOT' });
+      dispatch({ type: 'MOVE_AREA', id: selectedArea.id, x: selectedArea.x + dx, y: selectedArea.y + dy });
+    }
     else if (e.key === 'Escape' && focusedId != null) handleFocusChange(null);
     else if ((e.key === 'Delete' || e.key === 'Backspace') && focusedToken) handleRemoveToken(focusedToken.id);
     else if (e.key === 'Enter' && focusedToken) handleConfirmPosition(focusedToken.id);
@@ -598,6 +661,15 @@ export default function App() {
                   </button>
                   <button
                     className="btn btn-clr"
+                    onClick={() => handleAddArea(focusedToken)}
+                    title={focusedToken
+                      ? `Add an area of effect around ${focusedToken.name} (smoke, fire…)`
+                      : 'Add an area of effect in the middle of the screen (smoke, fire…)'}
+                  >
+                    + Area
+                  </button>
+                  <button
+                    className="btn btn-clr"
                     onClick={() => setSaveOpen(true)}
                     disabled={boardEmpty && state.sceneMapId == null}
                     title="Save the map, adversary positions and spawn points as an encounter"
@@ -636,6 +708,10 @@ export default function App() {
               map={isGM ? sceneMap : scene}
               fitKey={fitKey}
               spawnPoints={isGM ? state.spawnPoints : []}
+              areas={state.areas}
+              selectedAreaId={areaId}
+              onSelectArea={handleSelectArea}
+              onMoveArea={(id, x, y) => dispatch({ type: 'MOVE_AREA', id, x, y })}
               spawnMode={isGM && spawnMode}
               onFocusChange={handleFocusChange}
               onConfirmPosition={handleConfirmPosition}
@@ -655,7 +731,7 @@ export default function App() {
                   onClick={() => setPanelOpen(o => !o)}
                   aria-expanded={panelOpen}
                 >
-                  {panelOpen ? 'Hide panel' : focusedToken ? focusedToken.name : 'Units ▸'}
+                  {panelOpen ? 'Hide panel' : focusedToken ? focusedToken.name : selectedArea ? selectedArea.name : 'Units ▸'}
                 </button>
                 <BattleSidePanel
                   characters={state.characters}
@@ -665,6 +741,12 @@ export default function App() {
                   findAdversary={findAdversary}
                   focusedToken={focusedToken}
                   ringAnchor={ringAnchor}
+                  areas={state.areas}
+                  selectedArea={selectedArea}
+                  onAddArea={handleAddArea}
+                  onUpdateArea={(id, patch) => dispatch({ type: 'UPDATE_AREA', id, patch })}
+                  onRemoveArea={handleRemoveArea}
+                  onSelectArea={handleSelectArea}
                   open={panelOpen}
                   onQuickAddCharacter={handleQuickAddCharacter}
                   onQuickAddAdversary={handleQuickAddAdversary}

@@ -66,6 +66,10 @@ export default function Graph({
   onRemoveSpawn,       // (index) => void
   onMoveSpawn,         // (index, x, y) => void
   onSpawnModeEnd,
+  areas = [],          // areas of effect (players get only the visible ones)
+  selectedAreaId,
+  onSelectArea,        // (id) => void
+  onMoveArea,          // (id, x, y) => void
   role,
   viewRef,             // ref the map writes its viewport/centre into (kept across remounts)
 }) {
@@ -160,14 +164,19 @@ export default function Graph({
   const centerOn = (px, py, z = zoom) =>
     setViewport({ zoom: z, panX: px - dims.width / (2 * z), panY: py - dims.height / (2 * z) });
 
-  // Frame every token on the board, and the map background.
+  // Frame every token and area on the board, and the map background.
   const fitAll = () => {
-    if (!tokens.length && !bgRect) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
+    if (!tokens.length && !areas.length && !bgRect) { setViewport({ zoom: 1, panX: 0, panY: 0 }); return; }
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     tokens.forEach(t => {
       const r = toPx(tokenRadiusM(t));
       x0 = Math.min(x0, toPx(t.x) - r); x1 = Math.max(x1, toPx(t.x) + r);
       y0 = Math.min(y0, toPx(t.y) - r); y1 = Math.max(y1, toPx(t.y) + r);
+    });
+    areas.forEach(a => {
+      const r = toPx(a.radius);
+      x0 = Math.min(x0, toPx(a.x) - r); x1 = Math.max(x1, toPx(a.x) + r);
+      y0 = Math.min(y0, toPx(a.y) - r); y1 = Math.max(y1, toPx(a.y) + r);
     });
     if (bgRect) {
       x0 = Math.min(x0, toPx(bgRect.x)); x1 = Math.max(x1, toPx(bgRect.x + bgRect.w));
@@ -185,7 +194,7 @@ export default function Graph({
   const live = useRef({});
   live.current = {
     viewport, focusedId, isGM, onFocusChange, onConfirmPosition, onMoveToken, onMoveStart, zoomBy, fitAll,
-    spawnMode, onAddSpawn, onRemoveSpawn, onMoveSpawn,
+    spawnMode, onAddSpawn, onRemoveSpawn, onMoveSpawn, onSelectArea, onMoveArea,
   };
 
   // ── Keyboard: zoom / fit ───────────────────────────────────────────────
@@ -250,7 +259,7 @@ export default function Graph({
     };
   };
 
-  function beginPointer(e, tok, spawnIndex) {
+  function beginPointer(e, tok, spawnIndex, area) {
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     const pts = pointersRef.current;
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -270,6 +279,10 @@ export default function Graph({
     if (pts.size > 2) return;
 
     const k = v.zoom * PX_PER_M;
+    if (area) {
+      gestureRef.current = { kind: 'area', id: area.id, x0: e.clientX, y0: e.clientY, tx0: area.x, ty0: area.y, k, moved: false };
+      return;
+    }
     if (spawnIndex != null) {
       const p = spawnPoints[spawnIndex];
       gestureRef.current = { kind: 'spawn', index: spawnIndex, x0: e.clientX, y0: e.clientY, tx0: p.x, ty0: p.y, k, moved: false };
@@ -302,11 +315,12 @@ export default function Graph({
       if (!g.moved && dx * dx + dy * dy > slop * slop) {
         g.moved = true;
         if (g.kind === 'pan')  setPanning(true);
-        if (g.kind === 'drag' || g.kind === 'spawn') live.current.onMoveStart?.(g.id);
+        if (g.kind === 'drag' || g.kind === 'spawn' || g.kind === 'area') live.current.onMoveStart?.(g.id);
       }
       if (!g.moved) return;
       if (g.kind === 'drag') live.current.onMoveToken(g.id, g.tx0 + dx / g.k, g.ty0 + dy / g.k);
       else if (g.kind === 'spawn') live.current.onMoveSpawn(g.index, g.tx0 + dx / g.k, g.ty0 + dy / g.k);
+      else if (g.kind === 'area') live.current.onMoveArea(g.id, g.tx0 + dx / g.k, g.ty0 + dy / g.k);
       else setViewport(v => ({ ...v, panX: g.panX0 - dx / g.z, panY: g.panY0 - dy / g.z }));
     };
 
@@ -334,6 +348,8 @@ export default function Graph({
         else L.onFocusChange(g.id);
       } else if (g.kind === 'spawn') {
         L.onRemoveSpawn(g.index);
+      } else if (g.kind === 'area') {
+        L.onSelectArea(g.id);
       } else if (L.isGM && L.spawnMode) {
         const p = worldAt(e.clientX, e.clientY);
         L.onAddSpawn(p.x, p.y);
@@ -362,7 +378,7 @@ export default function Graph({
       className="graph-container"
       style={{ cursor: panning ? 'grabbing' : spawnMode ? 'crosshair' : 'default' }}
     >
-      {tokens.length === 0 && !bgRect && !spawnMode && (
+      {tokens.length === 0 && areas.length === 0 && !bgRect && !spawnMode && (
         <div className="empty-msg">
           <span className="empty-icon">⚔</span>
           {isGM ? (
@@ -427,6 +443,34 @@ export default function Graph({
               >
                 {i + 1}
               </text>
+            </g>
+          );
+        })}
+
+        {/* ── Areas of effect ── The fill lets clicks through (a Far-sized cloud
+            must not block panning); the GM grabs an area by its tag (drawn above the tokens). */}
+        {areas.map(a => {
+          const selected = isGM && a.id === selectedAreaId;
+          return (
+            <g key={a.id} opacity={a.hidden ? 0.55 : 1} style={{ pointerEvents: 'none' }}>
+              <circle
+                cx={toPx(a.x)} cy={toPx(a.y)} r={toPx(a.radius)}
+                fill={a.color} fillOpacity={a.hidden ? 0.08 : 0.18}
+                stroke={a.color} strokeOpacity={selected ? 1 : 0.75}
+                strokeWidth={selected ? 2.5 : 1.5} strokeDasharray={selected ? undefined : '6 4'}
+                vectorEffect="non-scaling-stroke"
+              />
+              {!isGM && (
+                <text
+                  x={toPx(a.x)} y={toPx(a.y - a.radius) - 6 * ui}
+                  textAnchor="middle" fontSize={11 * ui} fontWeight={700}
+                  fill={a.color}
+                  {...haloText}
+                  {...textProps}
+                >
+                  {a.name}
+                </text>
+              )}
             </g>
           );
         })}
@@ -657,6 +701,36 @@ export default function Graph({
             );
           })}
         </g>
+
+        {/* ── Area tags (GM): a pin on the top of the circle — click to edit, drag to move ── */}
+        {isGM && areas.map(a => {
+          const x = toPx(a.x), y = toPx(a.y - a.radius);
+          const selected = a.id === selectedAreaId;
+          return (
+            <g
+              key={a.id}
+              opacity={a.hidden ? 0.7 : 1}
+              style={{ cursor: panning ? 'grabbing' : 'grab' }}
+              onPointerDown={e => { e.stopPropagation(); beginPointer(e, null, null, a); }}
+            >
+              <title>{`${a.name} — click to edit, drag to move`}</title>
+              <circle
+                cx={x} cy={y} r={6 * ui}
+                fill={selected ? a.color : '#0f172a'} stroke={a.color} strokeWidth={2}
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={x} y={y - 10 * ui}
+                textAnchor="middle" fontSize={11 * ui} fontWeight={700}
+                fill={a.color}
+                {...haloText}
+                style={{ userSelect: 'none' }}
+              >
+                {`${a.name} · ${+a.radius.toFixed(1)} m${a.hidden ? ' · hidden' : ''}`}
+              </text>
+            </g>
+          );
+        })}
       </svg>
 
       {/* ── Notices: spawn mode, broken background ── */}
