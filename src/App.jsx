@@ -12,8 +12,7 @@ import {
   spawnPositions, PX_PER_M,
 } from './constants';
 import { applyImport, buildSelection, downloadJson, encounterFileName } from './transfer';
-import { SRD_ADVERSARIES } from './adversaryData';
-import { loadState, saveState } from './storage';
+import { loadState, saveState, storedSeedVersion } from './storage';
 import './App.css';
 
 // ── Role & channel (determined once at load time) ─────────────────────────────
@@ -25,12 +24,17 @@ const LOST_MS      = 6000;   // players call the GM gone after this much silence
 
 // ── Reducer ───────────────────────────────────────────────────────────────────
 
-// Fresh GMs start with the full SRD adversary library pre-loaded.
-const SEED_ADVERSARIES = SRD_ADVERSARIES.map((a, i) => ({ ...a, id: i + 1 }));
-
 // Bump to re-seed the SRD library for returning GMs (add changes to srdUpdates.js).
 // 2 — SRD 2.0 adversaries.
 const SEED_VERSION = 2;
+
+// Fresh GMs start with the full SRD adversary library pre-loaded. The data is a
+// separate ~400 kB chunk, fetched only when seeding is due — returning GMs keep
+// their stored library and players never show it.
+const SRD_ADVERSARIES = ROLE === 'gm' && storedSeedVersion() !== SEED_VERSION
+  ? (await import('./adversaryData')).SRD_ADVERSARIES
+  : [];
+const SEED_ADVERSARIES = SRD_ADVERSARIES.map((a, i) => ({ ...a, id: i + 1 }));
 
 // Bump when stored board data becomes incompatible (the board is cleared on load).
 // 2 — token coordinates switched from pixels to metres.

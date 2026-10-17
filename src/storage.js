@@ -19,6 +19,15 @@ function applySrdUpdates(adversaries, updates) {
   });
 }
 
+// Seed version of the stored library, or undefined for a fresh / unreadable store.
+export function storedSeedVersion() {
+  try {
+    return JSON.parse(localStorage.getItem(KEY))?.seedVersion;
+  } catch {
+    return undefined;
+  }
+}
+
 export function loadState(fallback) {
   try {
     const raw = localStorage.getItem(KEY);
